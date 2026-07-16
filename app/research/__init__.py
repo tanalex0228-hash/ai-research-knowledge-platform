@@ -1,0 +1,2 @@
+"""Canonical research catalog domain."""
+

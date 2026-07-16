@@ -1,0 +1,14 @@
+[project]
+name = "ai-research-knowledge-platform"
+version = "0.1.0"
+description = "Phase 0/1 MVP for a permission-aware academic research knowledge platform"
+requires-python = ">=3.11"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+

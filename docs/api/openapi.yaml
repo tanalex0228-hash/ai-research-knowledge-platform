@@ -1,0 +1,127 @@
+openapi: 3.1.0
+info:
+  title: AI Research Knowledge Platform API
+  version: 0.1.0
+  description: Phase 0/1 permission-aware catalog contract. AI endpoints are explicit stubs.
+servers:
+  - url: /api/v1
+paths:
+  /research-works:
+    get:
+      summary: List research works visible to the caller
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: year, in: query, schema: {type: integer}}
+        - {name: work_type, in: query, schema: {type: string}}
+        - {name: language, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: Permission-filtered results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, results, request_id]
+                properties:
+                  count: {type: integer}
+                  results: {type: array, items: {$ref: "#/components/schemas/ResearchWork"}}
+                  request_id: {type: string}
+  /research-works/{id}:
+    get:
+      summary: Read a visible research work
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Research work with visible advisors and governed taxonomy
+        "404": {$ref: "#/components/responses/NotFound"}
+  /research-works/{id}/documents:
+    post:
+      summary: Upload a validated source PDF
+      description: Administrator-only. File metadata and storage URLs are not returned.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+                visibility_scope: {$ref: "#/components/schemas/VisibilityScope"}
+      responses:
+        "201": {description: Source document accepted}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /professors:
+    get:
+      summary: List visible active professors
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Permission-filtered professor results}
+  /professors/{id}:
+    get:
+      summary: Read a visible professor and related visible works
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": {description: Professor research profile}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /search/semantic:
+    post:
+      summary: Semantic search placeholder
+      responses:
+        "501": {$ref: "#/components/responses/NotImplemented"}
+  /ai/teacher-matching:
+    post:
+      summary: AI teacher-matching placeholder
+      responses:
+        "501": {$ref: "#/components/responses/NotImplemented"}
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    VisibilityScope:
+      type: string
+      enum: [public, student, teacher, admin]
+    ResearchWork:
+      type: object
+      required: [id, work_type, title, abstract, year, language, status, visibility_scope]
+      properties:
+        id: {type: string, format: uuid}
+        work_type: {type: string}
+        title: {type: string}
+        abstract: {type: string}
+        year: {type: integer}
+        language: {type: string}
+        status: {type: string}
+        visibility_scope: {$ref: "#/components/schemas/VisibilityScope"}
+    Error:
+      type: object
+      required: [error_code, message, details, request_id]
+      properties:
+        error_code: {type: string}
+        message: {type: string}
+        details: {type: object, additionalProperties: true}
+        request_id: {type: string}
+  responses:
+    Error:
+      description: Structured API error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: Missing or inaccessible resource; existence is not disclosed
+    NotImplemented:
+      description: Feature is intentionally deferred for this MVP phase
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+

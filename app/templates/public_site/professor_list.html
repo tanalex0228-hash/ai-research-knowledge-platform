@@ -1,0 +1,14 @@
+{% extends "public_site/base.html" %}
+{% block title %}教師探索｜AI 師生研究知識平台{% endblock %}
+{% block content %}
+<section class="page-header"><div class="container"><p class="eyebrow">Professors</p><h1>教師研究探索</h1><p>從教師歷年公開研究了解其領域、方法與指導成果。</p></div></section>
+<section class="container py-5">
+  <form method="get" class="row g-2 mb-4" role="search"><div class="col-md-9"><label class="visually-hidden" for="professor-search">搜尋教師</label><input id="professor-search" class="form-control" name="q" value="{{ query }}" placeholder="教師姓名或研究方向"></div><div class="col-md-3"><button class="btn btn-primary w-100">搜尋</button></div></form>
+  <div class="row g-4">
+    {% for professor in page_obj %}<div class="col-md-6 col-lg-4"><article class="research-card h-100"><p class="eyebrow">{{ professor.title|default:"教師" }}</p><h2 class="h5"><a href="{% url 'public_site:professor-detail' professor.id %}">{{ professor.display_name }}</a></h2><p>{{ professor.profile_summary|truncatechars:150|default:"研究資料整理中。" }}</p><a href="{% url 'public_site:professor-detail' professor.id %}">查看研究頁 →</a></article></div>
+    {% empty %}<p class="text-secondary">找不到符合條件的公開教師資料。</p>{% endfor %}
+  </div>
+  {% include "public_site/partials/pagination.html" %}
+</section>
+{% endblock %}
+
