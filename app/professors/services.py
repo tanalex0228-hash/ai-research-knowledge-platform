@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from django.db import models
 
-from .models import Professor, normalize_person_name
+from accounts.permissions import is_platform_teacher, visible_scopes_for
+
+from .models import Professor, ProfessorStatus, normalize_person_name
 
 
 def find_professors_by_name(value: str, *, user=None):
@@ -17,3 +19,15 @@ def find_professors_by_name(value: str, *, user=None):
         )
         .distinct()
     )
+
+
+def linked_professor_for_teacher(user) -> Professor | None:
+    """Resolve the sole Professor profile that grants a teacher object access."""
+
+    if not is_platform_teacher(user):
+        return None
+    return Professor.objects.filter(
+        user=user,
+        status=ProfessorStatus.ACTIVE,
+        visibility_scope__in=visible_scopes_for(user),
+    ).first()

@@ -25,7 +25,14 @@ def create_source_document(
         uploaded_by=uploaded_by,
         visibility_scope=visibility_scope,
     )
-    document.save()
+    try:
+        document.save()
+    except Exception:
+        # File storage is outside the database transaction. If model persistence
+        # fails after storage writes the blob, remove the ungoverned orphan.
+        if document.file and getattr(document.file, "_committed", False):
+            document.file.delete(save=False)
+        raise
     return document
 
 
@@ -38,8 +45,17 @@ def get_accessible_document(
     do not leak the existence of restricted resources.
     """
 
+    allowed = tuple(allowed_scopes)
     try:
-        return SourceDocument.objects.for_scopes(allowed_scopes).get(pk=document_id)
+        return (
+            SourceDocument.objects.for_scopes(allowed)
+            .select_related("research_work")
+            .get(
+                pk=document_id,
+                research_work__status="published",
+                research_work__visibility_scope__in=allowed,
+            )
+        )
     except SourceDocument.DoesNotExist as exc:
         raise PermissionDenied("Document unavailable.") from exc
 
@@ -54,4 +70,3 @@ def open_document_for_download(document: SourceDocument):
 def queue_document_extraction(document: SourceDocument) -> None:
     del document
     raise NotImplementedError("PDF extraction is scheduled for Phase 2.")
-

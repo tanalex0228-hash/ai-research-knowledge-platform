@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import uuid
-
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.csrf import csrf_exempt
 
 from accounts.services import record_audit_event
 from documents.choices import VisibilityScope
@@ -15,22 +15,27 @@ from professors.models import Professor
 from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
 from taxonomy.models import ResearchField, ResearchMethod
 
-from .permissions import is_admin, visible_professors, visible_research_works
+from .api_errors import api_error_response
+from .permissions import (
+    is_admin,
+    manageable_research_works,
+    visible_professors,
+    visible_research_works,
+)
+from .request_ids import request_id_for
 
 
 def _request_id(request) -> str:
-    return request.headers.get("X-Request-ID", str(uuid.uuid4()))[:128]
+    return request_id_for(request)
 
 
 def _error(request, code: str, message: str, status: int, details=None):
-    return JsonResponse(
-        {
-            "error_code": code,
-            "message": message,
-            "details": details or {},
-            "request_id": _request_id(request),
-        },
+    return api_error_response(
+        request,
+        error_code=code,
+        message=message,
         status=status,
+        details=details,
     )
 
 
@@ -139,33 +144,53 @@ def professor_detail(request, professor_id):
 
 @require_POST
 def research_work_document_upload(request, work_id):
-    if not is_admin(request.user):
-        return _error(request, "NOT_FOUND", "Resource not found.", 404)
-    work = get_object_or_404(ResearchWork, pk=work_id)
+    work = get_object_or_404(manageable_research_works(request.user), pk=work_id)
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
         return _error(request, "FILE_REQUIRED", "A PDF file is required.", 400)
+    requested_scope = request.POST.get("visibility_scope", "").strip()
+    if is_admin(request.user):
+        visibility_scope = requested_scope or VisibilityScope.ADMIN
+    else:
+        if requested_scope and requested_scope != VisibilityScope.TEACHER:
+            return _error(
+                request,
+                "INVALID_VISIBILITY_SCOPE",
+                "Teacher uploads must remain teacher-only until administrator review.",
+                400,
+                {"visibility_scope": "Only the teacher scope is allowed."},
+            )
+        visibility_scope = VisibilityScope.TEACHER
+    request_id = _request_id(request)
+    document = None
     try:
-        document = create_source_document(
-            research_work=work,
-            uploaded_file=uploaded_file,
-            uploaded_by=request.user,
-            visibility_scope=request.POST.get("visibility_scope", VisibilityScope.ADMIN),
-        )
+        with transaction.atomic():
+            document = create_source_document(
+                research_work=work,
+                uploaded_file=uploaded_file,
+                uploaded_by=request.user,
+                visibility_scope=visibility_scope,
+            )
+            record_audit_event(
+                event_type="source_document.uploaded",
+                actor=request.user,
+                target_type="documents.SourceDocument",
+                target_id=document.id,
+                request_id=request_id,
+                metadata={
+                    "research_work_id": str(work.id),
+                    "visibility_scope": document.visibility_scope,
+                },
+            )
     except ValidationError as exc:
         details = getattr(exc, "message_dict", {"file": exc.messages})
         return _error(request, "INVALID_DOCUMENT", "The document was rejected.", 400, details)
-    record_audit_event(
-        event_type="source_document.uploaded",
-        actor=request.user,
-        target_type="documents.SourceDocument",
-        target_id=document.id,
-        request_id=_request_id(request),
-        metadata={
-            "research_work_id": str(work.id),
-            "visibility_scope": document.visibility_scope,
-        },
-    )
+    except Exception:
+        # Database rollback cannot remove a blob already written by storage.
+        # Avoid leaving an ungoverned orphan if audit persistence fails.
+        if document is not None and document.file:
+            document.file.delete(save=False)
+        raise
     return JsonResponse(
         {
             "data": {
@@ -174,12 +199,13 @@ def research_work_document_upload(request, work_id):
                 "extraction_status": document.extraction_status,
                 "visibility_scope": document.visibility_scope,
             },
-            "request_id": _request_id(request),
+            "request_id": request_id,
         },
         status=201,
     )
 
 
+@csrf_exempt
 @require_POST
 def semantic_search(request):
     return _error(
@@ -190,6 +216,7 @@ def semantic_search(request):
     )
 
 
+@csrf_exempt
 @require_POST
 def teacher_matching(request):
     return _error(

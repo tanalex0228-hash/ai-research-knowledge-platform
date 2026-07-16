@@ -4,8 +4,9 @@ import unicodedata
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from accounts.permissions import VisibilityScope, visible_scopes_for
@@ -44,6 +45,20 @@ class SourceQuality(models.TextChoices):
 
 
 class ResearchWorkQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        if "status" in kwargs:
+            raise ValidationError(
+                "Research work status must be changed through transition_research_work()."
+            )
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        if "status" in fields:
+            raise ValidationError(
+                "Research work status must be changed through transition_research_work()."
+            )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
     def published(self):
         return self.filter(status=ResearchWorkStatus.PUBLISHED)
 
@@ -157,7 +172,19 @@ class ResearchWork(models.Model):
             ),
         ]
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, _allow_status_transition=False, **kwargs):
+        # Trusted imports/fixtures may create a record at an existing lifecycle
+        # state. Once persisted, every status change must use the transition service.
+        if self.pk and not self._state.adding and not _allow_status_transition:
+            persisted_status = (
+                type(self)._base_manager.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            if persisted_status is not None and persisted_status != self.status:
+                raise ValidationError(
+                    {"status": "Use transition_research_work() to change lifecycle state."}
+                )
         self.normalized_title = normalize_research_text(self.title)
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
@@ -166,6 +193,80 @@ class ResearchWork(models.Model):
 
     def __str__(self) -> str:
         return f"{self.title} ({self.year})"
+
+
+class ResearchWorkTransitionQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        del kwargs
+        raise ValidationError("Research work transition records are immutable.")
+
+    def delete(self):
+        raise ValidationError("Research work transition records are immutable.")
+
+    def bulk_create(self, objs, **kwargs):
+        del objs, kwargs
+        raise ValidationError(
+            "Research work transition rows may only be created by the lifecycle service."
+        )
+
+
+class ResearchWorkTransition(models.Model):
+    """Append-only evidence of one legal ResearchWork lifecycle transition."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    research_work = models.ForeignKey(
+        ResearchWork,
+        on_delete=models.PROTECT,
+        related_name="transitions",
+    )
+    from_status = models.CharField(max_length=24, choices=ResearchWorkStatus.choices)
+    to_status = models.CharField(max_length=24, choices=ResearchWorkStatus.choices)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="research_work_transitions",
+    )
+    reason = models.TextField()
+    request_id = models.CharField(max_length=128, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    objects = ResearchWorkTransitionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ("created_at", "id")
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(from_status=F("to_status")),
+                name="research_work_transition_changes_status",
+            ),
+            models.CheckConstraint(
+                condition=~Q(reason=""),
+                name="research_work_transition_reason_not_empty",
+            ),
+            models.CheckConstraint(
+                condition=~Q(request_id=""),
+                name="research_work_transition_request_id_not_empty",
+            ),
+        ]
+
+    def save(self, *args, _allow_transition_record=False, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Research work transition records are immutable.")
+        if not _allow_transition_record:
+            raise ValidationError(
+                "Research work transition rows may only be created by the lifecycle service."
+            )
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        del args, kwargs
+        raise ValidationError("Research work transition records are immutable.")
+
+    def __str__(self) -> str:
+        return f"{self.research_work_id}: {self.from_status} → {self.to_status}"
 
 
 class StudentStatus(models.TextChoices):
@@ -232,7 +333,10 @@ class Student(models.Model):
     def display_name_for(self, user=None) -> str:
         if self.is_name_public:
             return self.public_display_name or self.display_name
-        if self.visibility_scope in visible_scopes_for(user):
+        if (
+            getattr(user, "is_authenticated", False)
+            and self.visibility_scope in visible_scopes_for(user)
+        ):
             return self.display_name
         return "Student author"
 

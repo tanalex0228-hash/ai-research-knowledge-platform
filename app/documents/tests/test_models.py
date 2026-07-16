@@ -143,3 +143,79 @@ class SourceDocumentPersistenceTests(TestCase):
         self.assertEqual(len(document.checksum), 64)
         with self.assertRaises(PrivateDocumentURLUnavailable):
             _ = document.file.url
+
+    def test_saved_file_and_parent_work_are_immutable(self):
+        first_work = ResearchWork.objects.create(
+            work_type=ResearchWork.WorkType.UNDERGRADUATE_PROJECT,
+            title="Immutable source fixture",
+            year=2026,
+        )
+        second_work = ResearchWork.objects.create(
+            work_type=ResearchWork.WorkType.UNDERGRADUATE_PROJECT,
+            title="Other immutable source fixture",
+            year=2026,
+        )
+        document = SourceDocument.objects.create(
+            research_work=first_work,
+            file=SimpleUploadedFile(
+                "original.pdf",
+                b"%PDF-1.4\nimmutable fixture\n%%EOF",
+                content_type="application/pdf",
+            ),
+        )
+
+        document.file = SimpleUploadedFile(
+            "replacement.pdf",
+            b"%PDF-1.4\nreplacement fixture\n%%EOF",
+            content_type="application/pdf",
+        )
+        with self.assertRaisesMessage(ValidationError, "immutable"):
+            document.save()
+
+        document.refresh_from_db()
+        document.research_work = second_work
+        with self.assertRaisesMessage(ValidationError, "immutable"):
+            document.save()
+
+        with self.assertRaisesMessage(ValidationError, "immutable"):
+            SourceDocument.objects.filter(pk=document.pk).update(
+                research_work=second_work
+            )
+
+        document.refresh_from_db()
+        document.research_work = second_work
+        with self.assertRaisesMessage(ValidationError, "immutable"):
+            SourceDocument.objects.bulk_update([document], ["research_work"])
+
+        document.refresh_from_db()
+        document.visibility_scope = VisibilityScope.PUBLIC
+        with self.assertRaisesMessage(ValidationError, "immutable"):
+            document.save(update_fields={"visibility_scope"})
+
+    def test_committed_row_or_cascade_deletion_removes_private_blob(self):
+        for delete_parent in (False, True):
+            with self.subTest(delete_parent=delete_parent):
+                work = ResearchWork.objects.create(
+                    work_type=ResearchWork.WorkType.UNDERGRADUATE_PROJECT,
+                    title=f"Deletion cleanup fixture {delete_parent}",
+                    year=2026,
+                )
+                document = SourceDocument.objects.create(
+                    research_work=work,
+                    file=SimpleUploadedFile(
+                        f"cleanup-{delete_parent}.pdf",
+                        f"%PDF-1.4\ncleanup {delete_parent}\n%%EOF".encode(),
+                        content_type="application/pdf",
+                    ),
+                )
+                storage = document.file.storage
+                file_name = document.file.name
+                self.assertTrue(storage.exists(file_name))
+
+                with self.captureOnCommitCallbacks(execute=True):
+                    if delete_parent:
+                        work.delete()
+                    else:
+                        SourceDocument.objects.filter(pk=document.pk).delete()
+
+                self.assertFalse(storage.exists(file_name))

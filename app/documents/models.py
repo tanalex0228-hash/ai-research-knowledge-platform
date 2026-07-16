@@ -5,8 +5,10 @@ from pathlib import PurePath
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.db.models import F, Q
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 from accounts.permissions import visible_scopes_for
 
@@ -41,6 +43,34 @@ class VisibilityQuerySet(models.QuerySet):
     def visible_to(self, user):
         return self.for_scopes(visible_scopes_for(user))
 
+
+class SourceDocumentQuerySet(VisibilityQuerySet):
+    immutable_source_fields = frozenset(
+        {
+            "file",
+            "research_work",
+            "research_work_id",
+            "visibility_scope",
+            "uploaded_by",
+            "uploaded_by_id",
+        }
+    )
+
+    def update(self, **kwargs):
+        if self.immutable_source_fields.intersection(kwargs):
+            raise ValidationError(
+                "A source document's file, research work, visibility, and uploader are immutable; "
+                "create a new document."
+            )
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        if self.immutable_source_fields.intersection(fields):
+            raise ValidationError(
+                "A source document's file, research work, visibility, and uploader are immutable; "
+                "create a new document."
+            )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
 
 class SourceDocument(models.Model):
     """A privately stored source PDF attached to one research work."""
@@ -89,7 +119,7 @@ class SourceDocument(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    objects = VisibilityQuerySet.as_manager()
+    objects = SourceDocumentQuerySet.as_manager()
 
     class Meta:
         ordering = ("-uploaded_at", "id")
@@ -154,6 +184,21 @@ class SourceDocument(models.Model):
             )
 
     def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            persisted = type(self)._base_manager.only(
+                "research_work_id", "file", "visibility_scope", "uploaded_by_id"
+            ).get(pk=self.pk)
+            if (
+                persisted.research_work_id != self.research_work_id
+                or persisted.file.name != self.file.name
+                or persisted.visibility_scope != self.visibility_scope
+                or persisted.uploaded_by_id != self.uploaded_by_id
+            ):
+                raise ValidationError(
+                    "A source document's file, research work, visibility, and uploader "
+                    "are immutable; "
+                    "create a new document instead."
+                )
         if self.has_pending_upload:
             self._prepare_upload_metadata()
             update_fields = kwargs.get("update_fields")
@@ -260,3 +305,20 @@ class DocumentChunk(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
+
+
+@receiver(post_delete, sender=SourceDocument)
+def remove_private_blob_after_document_commit(sender, instance, using, **kwargs):
+    """Delete a private blob only after the row/cascade deletion commits."""
+
+    del sender, kwargs
+    file_name = getattr(instance.file, "name", "")
+    if not file_name:
+        return
+    storage = instance.file.storage
+
+    def remove_if_unreferenced():
+        if not SourceDocument.objects.using(using).filter(file=file_name).exists():
+            storage.delete(file_name)
+
+    transaction.on_commit(remove_if_unreferenced, using=using)

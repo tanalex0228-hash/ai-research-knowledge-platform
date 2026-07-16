@@ -51,6 +51,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "public_site.middleware.RequestIDMiddleware",
+    "public_site.middleware.APIErrorMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -59,6 +61,8 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+CSRF_FAILURE_VIEW = "public_site.api_errors.csrf_failure"
 
 ROOT_URLCONF = "config.urls"
 
@@ -175,8 +179,15 @@ LOGGING = {
             "defaults": {"request_id": "-"},
         }
     },
+    "filters": {
+        "request_id": {"()": "public_site.request_ids.RequestIDLogFilter"},
+    },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "standard"}
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+            "filters": ["request_id"],
+        }
     },
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
 }

@@ -1,19 +1,29 @@
 import tempfile
 
-from django.core.exceptions import ValidationError
+from django.contrib.admin.sites import AdminSite
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
-from accounts.models import User
+from accounts.models import Role, User, UserRole
 from accounts.permissions import VisibilityScope
 from ai.models import PromptVersion
 from documents.models import DocumentChunk, SourceDocument
-from research.models import ResearchWork, ResearchWorkStatus, ResearchWorkType
+from professors.models import Professor
+from research.models import (
+    ResearchWork,
+    ResearchWorkStatus,
+    ResearchWorkType,
+    WorkAdvisor,
+)
+from review.admin import ReviewItemAdmin
 from review.models import (
     AIExtractionJob,
     AIExtractionResult,
     ExtractionResultType,
     ReviewAction,
+    ReviewDecision,
     ReviewItem,
     ReviewState,
     ReviewTargetType,
@@ -61,7 +71,12 @@ class ReviewWorkflowTests(TestCase):
             visibility_scope=VisibilityScope.PUBLIC,
         )
 
-    def make_review_item(self) -> ReviewItem:
+    def make_review_item(
+        self,
+        *,
+        target_type: str = ReviewTargetType.RESEARCH_WORK,
+        target_id=None,
+    ) -> ReviewItem:
         chunk = self.make_chunk("candidate")
         job = AIExtractionJob.objects.create(
             source_document=chunk.source_document,
@@ -78,11 +93,32 @@ class ReviewWorkflowTests(TestCase):
         )
         return ReviewItem.objects.create(
             extraction_result=result,
-            target_type=ReviewTargetType.RESEARCH_WORK,
-            target_id=chunk.source_document.research_work_id,
+            target_type=target_type,
+            target_id=target_id or chunk.source_document.research_work_id,
             field_path="fields",
             current_value={},
             candidate_value=result.candidate_data,
+        )
+
+    def make_teacher(self, suffix: str, *, active: bool = True):
+        user = User.objects.create_user(
+            username=f"teacher-{suffix}",
+            email=f"teacher-{suffix}@example.test",
+            is_active=active,
+        )
+        teacher_role = Role.objects.get(slug="teacher")
+        UserRole.objects.create(user=user, role=teacher_role)
+        professor = Professor.objects.create(
+            user=user,
+            display_name=f"Teacher {suffix}",
+        )
+        return user, professor
+
+    def make_admin(self) -> User:
+        return User.objects.create_superuser(
+            username=f"review-admin-{User.objects.count()}",
+            email=f"review-admin-{User.objects.count()}@example.test",
+            password="test-password",
         )
 
     def test_candidate_primary_evidence_cannot_cross_documents(self):
@@ -107,11 +143,7 @@ class ReviewWorkflowTests(TestCase):
 
     def test_admin_decision_updates_state_and_is_append_only(self):
         item = self.make_review_item()
-        admin = User.objects.create_superuser(
-            username="review-admin",
-            email="review-admin@example.test",
-            password="test-password",
-        )
+        admin = self.make_admin()
 
         decision = decide_review_item(
             item=item,
@@ -127,3 +159,200 @@ class ReviewWorkflowTests(TestCase):
         with self.assertRaises(ValidationError):
             decision.save()
 
+        with self.assertRaises(ValidationError):
+            ReviewDecision.objects.filter(pk=decision.pk).update(reason="Bypass")
+        with self.assertRaises(ValidationError):
+            ReviewDecision.objects.filter(pk=decision.pk).delete()
+
+    def test_governance_fields_cannot_be_mutated_directly(self):
+        item = self.make_review_item()
+        item.state = ReviewState.APPROVED
+        item.resolved_at = timezone.now()
+
+        with self.assertRaises(ValidationError):
+            item.save()
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.PENDING)
+
+        item.candidate_value = {"slug": "silently-rewritten"}
+        with self.assertRaises(ValidationError):
+            item.save()
+        with self.assertRaises(ValidationError):
+            ReviewItem.objects.filter(pk=item.pk).update(state=ReviewState.ARCHIVED)
+
+        bypass = ReviewItem(
+            extraction_result=item.extraction_result,
+            target_type=item.target_type,
+            target_id=item.target_id,
+            field_path=item.field_path,
+            candidate_value=item.candidate_value,
+            state=ReviewState.APPROVED,
+            resolved_at=timezone.now(),
+        )
+        with self.assertRaises(ValidationError):
+            ReviewItem.objects.bulk_create([bypass])
+
+    def test_decision_cannot_be_appended_outside_service(self):
+        item = self.make_review_item()
+        admin = self.make_admin()
+        decision = ReviewDecision(
+            review_item=item,
+            reviewer=admin,
+            action=ReviewAction.APPROVE,
+            previous_state=ReviewState.PENDING,
+            resulting_state=ReviewState.APPROVED,
+        )
+
+        with self.assertRaises(ValidationError):
+            decision.save()
+        self.assertFalse(ReviewDecision.objects.exists())
+
+    def test_teacher_review_and_terminal_transition_matrix(self):
+        item = self.make_review_item()
+        admin = self.make_admin()
+        teacher, professor = self.make_teacher("owner")
+        WorkAdvisor.objects.create(
+            research_work_id=item.target_id,
+            professor=professor,
+        )
+
+        first = decide_review_item(
+            item=item,
+            reviewer=admin,
+            action=ReviewAction.REQUEST_TEACHER_REVIEW,
+            assign_to=teacher,
+            reason="Request subject-owner review.",
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.TEACHER_REVIEW)
+        self.assertEqual(item.assigned_to, teacher)
+        self.assertIsNone(item.resolved_at)
+        self.assertEqual(first.resulting_state, ReviewState.TEACHER_REVIEW)
+        self.assertEqual(first.assigned_to_snapshot, teacher)
+
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=admin,
+                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                assign_to=teacher,
+            )
+
+        second = decide_review_item(
+            item=item,
+            reviewer=admin,
+            action=ReviewAction.APPROVE,
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.APPROVED)
+        self.assertIsNone(item.assigned_to)
+        self.assertIsNotNone(item.resolved_at)
+        self.assertEqual(second.previous_state, ReviewState.TEACHER_REVIEW)
+        self.assertEqual(first.assigned_to_snapshot, teacher)
+        self.assertIsNone(second.assigned_to_snapshot)
+        self.assertEqual(item.decisions.count(), 2)
+
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=admin,
+                action=ReviewAction.ARCHIVE,
+            )
+        self.assertEqual(item.decisions.count(), 2)
+
+    def test_teacher_assignment_requires_active_role_and_work_ownership(self):
+        item = self.make_review_item()
+        admin = self.make_admin()
+        teacher, _professor = self.make_teacher("not-advisor")
+
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=admin,
+                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                assign_to=teacher,
+            )
+
+        inactive_teacher, inactive_professor = self.make_teacher(
+            "inactive",
+            active=False,
+        )
+        WorkAdvisor.objects.create(
+            research_work_id=item.target_id,
+            professor=inactive_professor,
+        )
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=admin,
+                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                assign_to=inactive_teacher,
+            )
+
+    def test_professor_target_requires_profile_owner(self):
+        owner, owner_profile = self.make_teacher("profile-owner")
+        other, _other_profile = self.make_teacher("other-profile")
+        item = self.make_review_item(
+            target_type=ReviewTargetType.PROFESSOR,
+            target_id=owner_profile.pk,
+        )
+        admin = self.make_admin()
+
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=admin,
+                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                assign_to=other,
+            )
+
+        decide_review_item(
+            item=item,
+            reviewer=admin,
+            action=ReviewAction.REQUEST_TEACHER_REVIEW,
+            assign_to=owner,
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.assigned_to, owner)
+
+    def test_teacher_review_rejects_targets_without_teacher_ownership_model(self):
+        teacher, _profile = self.make_teacher("taxonomy-target")
+        item = self.make_review_item(target_type=ReviewTargetType.TAXONOMY)
+
+        with self.assertRaises(ValidationError):
+            decide_review_item(
+                item=item,
+                reviewer=self.make_admin(),
+                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                assign_to=teacher,
+            )
+
+    def test_inactive_superuser_cannot_decide_review_item(self):
+        admin = self.make_admin()
+        admin.is_active = False
+        admin.save(update_fields={"is_active"})
+
+        with self.assertRaises(PermissionDenied):
+            decide_review_item(
+                item=self.make_review_item(),
+                reviewer=admin,
+                action=ReviewAction.APPROVE,
+            )
+
+    def test_review_admin_exposes_only_governed_actions(self):
+        model_admin = ReviewItemAdmin(ReviewItem, AdminSite())
+
+        self.assertFalse(model_admin.has_add_permission(None))
+        self.assertFalse(model_admin.has_delete_permission(None))
+        for field_name in (
+            "state",
+            "assigned_to",
+            "resolved_at",
+            "candidate_value",
+            "current_value",
+        ):
+            self.assertIn(field_name, model_admin.readonly_fields)
+        self.assertEqual(
+            model_admin.actions,
+            ("approve_selected", "reject_selected", "archive_selected"),
+        )

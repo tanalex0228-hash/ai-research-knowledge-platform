@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Count, Prefetch
 
 from accounts.permissions import visible_scopes_for
@@ -9,11 +11,89 @@ from taxonomy.models import TaxonomyStatus
 from .models import (
     RelationshipStatus,
     ResearchWork,
+    ResearchWorkStatus,
+    ResearchWorkTransition,
     WorkAdvisor,
     WorkAuthor,
     WorkField,
     WorkMethod,
 )
+
+
+LEGAL_RESEARCH_WORK_TRANSITIONS = {
+    ResearchWorkStatus.DRAFT: frozenset({ResearchWorkStatus.UPLOADED}),
+    ResearchWorkStatus.UPLOADED: frozenset({ResearchWorkStatus.PARSED}),
+    ResearchWorkStatus.PARSED: frozenset({ResearchWorkStatus.AI_EXTRACTED}),
+    ResearchWorkStatus.AI_EXTRACTED: frozenset({ResearchWorkStatus.UNDER_REVIEW}),
+    ResearchWorkStatus.UNDER_REVIEW: frozenset(
+        {ResearchWorkStatus.APPROVED, ResearchWorkStatus.REJECTED}
+    ),
+    ResearchWorkStatus.APPROVED: frozenset({ResearchWorkStatus.PUBLISHED}),
+    ResearchWorkStatus.PUBLISHED: frozenset(
+        {ResearchWorkStatus.UNDER_REVIEW, ResearchWorkStatus.ARCHIVED}
+    ),
+}
+
+
+@transaction.atomic
+def transition_research_work(
+    *,
+    research_work: ResearchWork,
+    to_status: str,
+    actor,
+    reason: str,
+    request_id: str,
+) -> ResearchWorkTransition:
+    """Lock, validate, transition, and append one immutable lifecycle audit row."""
+
+    if not research_work.pk:
+        raise ValidationError({"research_work": "Research work must be saved first."})
+
+    normalized_status = str(getattr(to_status, "value", to_status))
+    if normalized_status not in ResearchWorkStatus.values:
+        raise ValidationError({"to_status": "Unknown research work lifecycle state."})
+    normalized_reason = str(reason or "").strip()
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_reason:
+        raise ValidationError({"reason": "A lifecycle transition reason is required."})
+    if not normalized_request_id:
+        raise ValidationError({"request_id": "A lifecycle request ID is required."})
+    if not (
+        getattr(actor, "is_authenticated", False)
+        and getattr(actor, "is_active", False)
+        and getattr(actor, "pk", None)
+    ):
+        raise ValidationError({"actor": "An active authenticated actor is required."})
+
+    locked = ResearchWork.objects.select_for_update().get(pk=research_work.pk)
+    allowed = LEGAL_RESEARCH_WORK_TRANSITIONS.get(locked.status, frozenset())
+    if normalized_status not in allowed:
+        raise ValidationError(
+            {
+                "to_status": (
+                    f"Illegal research work transition: "
+                    f"{locked.status} → {normalized_status}."
+                )
+            }
+        )
+
+    previous_status = locked.status
+    locked.status = normalized_status
+    update_fields = {"status", "updated_at"}
+    locked.updated_by = actor
+    update_fields.add("updated_by")
+    locked.save(update_fields=update_fields, _allow_status_transition=True)
+
+    transition = ResearchWorkTransition(
+        research_work=locked,
+        from_status=previous_status,
+        to_status=normalized_status,
+        actor=actor,
+        reason=normalized_reason,
+        request_id=normalized_request_id,
+    )
+    transition.save(_allow_transition_record=True)
+    return transition
 
 
 def research_catalog_for(user):

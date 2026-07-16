@@ -11,10 +11,14 @@ def record_audit_event(
     target_id=None,
     request_id: str = "",
     metadata: dict | None = None,
+    using: str | None = None,
 ) -> AuditLog:
     """Record non-sensitive event metadata in the append-only audit table."""
 
-    return AuditLog.objects.create(
+    manager = AuditLog.objects
+    if using is not None:
+        manager = manager.using(using)
+    return manager.create(
         event_type=event_type,
         actor=actor if getattr(actor, "is_authenticated", False) else None,
         target_type=target_type,

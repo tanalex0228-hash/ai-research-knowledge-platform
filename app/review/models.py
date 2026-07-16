@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -55,6 +57,53 @@ class ReviewTargetType(models.TextChoices):
     PROFESSOR = "professor", "Professor"
     TAXONOMY = "taxonomy", "Taxonomy"
     KNOWLEDGE_EDGE = "knowledge_edge", "Knowledge edge"
+
+
+TERMINAL_REVIEW_STATE_VALUES = (
+    ReviewState.APPROVED,
+    ReviewState.REJECTED,
+    ReviewState.ARCHIVED,
+)
+TERMINAL_REVIEW_STATES = frozenset(TERMINAL_REVIEW_STATE_VALUES)
+
+# A transition is legal only when it is represented here. In particular,
+# teacher-review cannot transition to itself and terminal states have no exits.
+REVIEW_TRANSITIONS = {
+    ReviewState.PENDING: {
+        ReviewAction.APPROVE: ReviewState.APPROVED,
+        ReviewAction.EDIT: ReviewState.APPROVED,
+        ReviewAction.REJECT: ReviewState.REJECTED,
+        ReviewAction.REQUEST_TEACHER_REVIEW: ReviewState.TEACHER_REVIEW,
+        ReviewAction.ARCHIVE: ReviewState.ARCHIVED,
+    },
+    ReviewState.TEACHER_REVIEW: {
+        ReviewAction.APPROVE: ReviewState.APPROVED,
+        ReviewAction.EDIT: ReviewState.APPROVED,
+        ReviewAction.REJECT: ReviewState.REJECTED,
+        ReviewAction.ARCHIVE: ReviewState.ARCHIVED,
+    },
+}
+
+
+_review_transition_context: ContextVar[bool] = ContextVar(
+    "review_transition_context",
+    default=False,
+)
+
+
+@contextmanager
+def _allow_review_transition():
+    """Internal capability used only by the row-locked decision service."""
+
+    token = _review_transition_context.set(True)
+    try:
+        yield
+    finally:
+        _review_transition_context.reset(token)
+
+
+def _transition_is_allowed() -> bool:
+    return _review_transition_context.get()
 
 
 def _validate_scope_not_wider(value: str, lower_bounds: tuple[str, ...]) -> None:
@@ -294,6 +343,50 @@ class AIExtractionEvidence(models.Model):
         return super().save(*args, **kwargs)
 
 
+class ReviewItemQuerySet(models.QuerySet):
+    governed_fields = frozenset(
+        {
+            "state",
+            "assigned_to",
+            "assigned_to_id",
+            "resolved_at",
+            "candidate_value",
+            "current_value",
+            "extraction_result",
+            "extraction_result_id",
+            "target_type",
+            "target_id",
+            "field_path",
+            "visibility_scope",
+        }
+    )
+
+    def update(self, **kwargs):
+        if self.governed_fields.intersection(kwargs) and not _transition_is_allowed():
+            raise ValidationError(
+                "Review governance fields may only change through decide_review_item()."
+            )
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        if self.governed_fields.intersection(fields) and not _transition_is_allowed():
+            raise ValidationError(
+                "Review governance fields may only change through decide_review_item()."
+            )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(self, objs, batch_size=None, ignore_conflicts=False, **kwargs):
+        objects = list(objs)
+        for review_item in objects:
+            review_item.full_clean()
+        return super().bulk_create(
+            objects,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            **kwargs,
+        )
+
+
 class ReviewItem(models.Model):
     """Review state only; approval does not directly mutate governed metadata."""
 
@@ -332,13 +425,35 @@ class ReviewItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
+    objects = ReviewItemQuerySet.as_manager()
+
     class Meta:
         ordering = ("state", "created_at", "id")
         constraints = [
             models.CheckConstraint(
                 condition=~Q(field_path=""),
                 name="review_item_field_path_not_empty",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        state=ReviewState.PENDING,
+                        assigned_to__isnull=True,
+                        resolved_at__isnull=True,
+                    )
+                    | Q(
+                        state=ReviewState.TEACHER_REVIEW,
+                        assigned_to__isnull=False,
+                        resolved_at__isnull=True,
+                    )
+                    | Q(
+                        state__in=TERMINAL_REVIEW_STATE_VALUES,
+                        assigned_to__isnull=True,
+                        resolved_at__isnull=False,
+                    )
+                ),
+                name="review_item_state_fields_consistent",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -346,6 +461,32 @@ class ReviewItem(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        errors: dict[str, str] = {}
+        if self._state.adding:
+            if self.state != ReviewState.PENDING:
+                errors["state"] = "A review item must be created in pending state."
+            if self.assigned_to_id is not None:
+                errors["assigned_to"] = "A new review item cannot be pre-assigned."
+            if self.resolved_at is not None:
+                errors["resolved_at"] = "A new review item cannot be pre-resolved."
+        elif self.state == ReviewState.PENDING:
+            if self.assigned_to_id is not None:
+                errors["assigned_to"] = "Pending review items cannot be assigned."
+            if self.resolved_at is not None:
+                errors["resolved_at"] = "Pending review items cannot be resolved."
+        elif self.state == ReviewState.TEACHER_REVIEW:
+            if self.assigned_to_id is None:
+                errors["assigned_to"] = "Teacher review requires an assignee."
+            if self.resolved_at is not None:
+                errors["resolved_at"] = "Teacher review is not a terminal state."
+        elif self.state in TERMINAL_REVIEW_STATES:
+            if self.assigned_to_id is not None:
+                errors["assigned_to"] = "Resolved review items cannot remain assigned."
+            if self.resolved_at is None:
+                errors["resolved_at"] = "Terminal review states require a resolution time."
+        if errors:
+            raise ValidationError(errors)
+
         if not self.extraction_result_id:
             return
         if not self.visibility_scope:
@@ -359,8 +500,60 @@ class ReviewItem(models.Model):
             raise ValidationError({"visibility_scope": exc.messages}) from exc
 
     def save(self, *args, **kwargs):
+        if not self._state.adding and not _transition_is_allowed():
+            persisted = type(self).objects.only(
+                "state",
+                "assigned_to_id",
+                "resolved_at",
+                "candidate_value",
+                "current_value",
+                "extraction_result_id",
+                "target_type",
+                "target_id",
+                "field_path",
+                "visibility_scope",
+            ).get(pk=self.pk)
+            immutable_fields = (
+                "state",
+                "assigned_to_id",
+                "resolved_at",
+                "candidate_value",
+                "current_value",
+                "extraction_result_id",
+                "target_type",
+                "target_id",
+                "field_path",
+                "visibility_scope",
+            )
+            if any(
+                getattr(self, field_name) != getattr(persisted, field_name)
+                for field_name in immutable_fields
+            ):
+                raise ValidationError(
+                    "Review governance fields may only change through "
+                    "decide_review_item()."
+                )
         self.full_clean()
         return super().save(*args, **kwargs)
+
+
+class ReviewDecisionQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        del kwargs
+        raise ValidationError("Review decisions are append-only.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        del objs, fields, batch_size
+        raise ValidationError("Review decisions are append-only.")
+
+    def bulk_create(self, objs, batch_size=None, ignore_conflicts=False, **kwargs):
+        del objs, batch_size, ignore_conflicts, kwargs
+        raise ValidationError(
+            "Review decisions may only be appended by decide_review_item()."
+        )
+
+    def delete(self):
+        raise ValidationError("Review decisions are append-only and cannot be deleted.")
 
 
 class ReviewDecision(models.Model):
@@ -377,6 +570,14 @@ class ReviewDecision(models.Model):
         on_delete=models.PROTECT,
         related_name="review_decisions",
     )
+    assigned_to_snapshot = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="review_assignment_decisions",
+        help_text="Immutable snapshot of the teacher selected by a review request.",
+    )
     action = models.CharField(max_length=30, choices=ReviewAction.choices)
     previous_state = models.CharField(max_length=24, choices=ReviewState.choices)
     resulting_state = models.CharField(max_length=24, choices=ReviewState.choices)
@@ -384,18 +585,107 @@ class ReviewDecision(models.Model):
     reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = ReviewDecisionQuerySet.as_manager()
+
     class Meta:
         ordering = ("review_item_id", "created_at", "id")
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    (
+                        Q(previous_state=ReviewState.PENDING)
+                        & (
+                            Q(
+                                action__in=(ReviewAction.APPROVE, ReviewAction.EDIT),
+                                resulting_state=ReviewState.APPROVED,
+                            )
+                            | Q(
+                                action=ReviewAction.REJECT,
+                                resulting_state=ReviewState.REJECTED,
+                            )
+                            | Q(
+                                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                                resulting_state=ReviewState.TEACHER_REVIEW,
+                            )
+                            | Q(
+                                action=ReviewAction.ARCHIVE,
+                                resulting_state=ReviewState.ARCHIVED,
+                            )
+                        )
+                    )
+                    | (
+                        Q(previous_state=ReviewState.TEACHER_REVIEW)
+                        & (
+                            Q(
+                                action__in=(ReviewAction.APPROVE, ReviewAction.EDIT),
+                                resulting_state=ReviewState.APPROVED,
+                            )
+                            | Q(
+                                action=ReviewAction.REJECT,
+                                resulting_state=ReviewState.REJECTED,
+                            )
+                            | Q(
+                                action=ReviewAction.ARCHIVE,
+                                resulting_state=ReviewState.ARCHIVED,
+                            )
+                            # Legacy Phase 0/1 decisions could re-request a teacher
+                            # review. The service now rejects this self-transition,
+                            # but the DB constraint preserves historical audit rows.
+                            | Q(
+                                action=ReviewAction.REQUEST_TEACHER_REVIEW,
+                                resulting_state=ReviewState.TEACHER_REVIEW,
+                            )
+                        )
+                    )
+                ),
+                name="review_decision_transition_legal",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.action} by {self.reviewer_id}"
 
+    def clean(self) -> None:
+        super().clean()
+        if not self.review_item_id:
+            return
+        expected_state = REVIEW_TRANSITIONS.get(self.previous_state, {}).get(self.action)
+        if expected_state is None or expected_state != self.resulting_state:
+            raise ValidationError({"action": "This review transition is not legal."})
+        if self.review_item.state != self.previous_state:
+            raise ValidationError(
+                {"previous_state": "Decision state does not match the locked review item."}
+            )
+        if self.action == ReviewAction.EDIT and self.decided_value is None:
+            raise ValidationError(
+                {"decided_value": "Edit decisions require a replacement value."}
+            )
+        if self.action == ReviewAction.REJECT and not self.reason.strip():
+            raise ValidationError({"reason": "Reject decisions require a reason."})
+        if (
+            self.action == ReviewAction.REQUEST_TEACHER_REVIEW
+            and self.assigned_to_snapshot_id is None
+        ):
+            raise ValidationError(
+                {"assigned_to_snapshot": "Teacher-review decisions require an assignee snapshot."}
+            )
+        if (
+            self.action != ReviewAction.REQUEST_TEACHER_REVIEW
+            and self.assigned_to_snapshot_id is not None
+        ):
+            raise ValidationError(
+                {"assigned_to_snapshot": "Only teacher-review decisions record an assignee."}
+            )
+
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError("Review decisions are append-only.")
+        if self._state.adding and not _transition_is_allowed():
+            raise ValidationError(
+                "Review decisions may only be appended by decide_review_item()."
+            )
         self.full_clean()
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Review decisions are append-only and cannot be deleted.")
-

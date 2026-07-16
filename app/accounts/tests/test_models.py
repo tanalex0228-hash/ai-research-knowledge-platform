@@ -1,7 +1,7 @@
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from accounts.models import Role, User, UserRole
+from accounts.models import AuditLog, Role, User, UserRole
 from accounts.permissions import VisibilityScope, visible_scopes_for
 
 
@@ -55,3 +55,15 @@ class RoleModelTests(TestCase):
         UserRole.objects.create(user=user, role=role)
         self.assertEqual(visible_scopes_for(user), (VisibilityScope.PUBLIC,))
         self.assertFalse(user.has_role("admin"))
+
+    def test_audit_logs_cannot_be_mutated_or_deleted(self):
+        event = AuditLog.objects.create(event_type="test.event")
+
+        with self.assertRaises(ValueError):
+            AuditLog.objects.filter(pk=event.pk).update(event_type="rewritten")
+        with self.assertRaises(ValueError):
+            AuditLog.objects.bulk_update([event], ["event_type"])
+        with self.assertRaises(ValueError):
+            AuditLog.objects.filter(pk=event.pk).delete()
+
+        self.assertEqual(AuditLog.objects.get(pk=event.pk).event_type, "test.event")

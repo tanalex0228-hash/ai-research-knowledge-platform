@@ -1,15 +1,23 @@
 openapi: 3.1.0
 info:
   title: AI Research Knowledge Platform API
-  version: 0.1.0
-  description: Phase 0/1 permission-aware catalog contract. AI endpoints are explicit stubs.
+  version: 0.1.5
+  description: >-
+    Phase 0/1 permission-aware catalog contract with Phase 1.5 governance
+    hardening. Every response includes X-Request-ID. Successful JSON payloads
+    and JSON errors repeat that same request ID. AI endpoints remain explicit stubs.
 servers:
   - url: /api/v1
+security:
+  - {}
+  - sessionAuth: []
 paths:
   /research-works:
     get:
+      operationId: listResearchWorks
       summary: List research works visible to the caller
       parameters:
+        - $ref: "#/components/parameters/RequestId"
         - {name: q, in: query, schema: {type: string}}
         - {name: year, in: query, schema: {type: integer}}
         - {name: work_type, in: query, schema: {type: string}}
@@ -17,6 +25,8 @@ paths:
       responses:
         "200":
           description: Permission-filtered results
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
           content:
             application/json:
               schema:
@@ -26,21 +36,40 @@ paths:
                   count: {type: integer}
                   results: {type: array, items: {$ref: "#/components/schemas/ResearchWork"}}
                   request_id: {type: string}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /research-works/{id}:
     get:
+      operationId: getResearchWork
       summary: Read a visible research work
       parameters:
         - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
       responses:
         "200":
           description: Research work with visible advisors and governed taxonomy
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /research-works/{id}/documents:
     post:
+      operationId: uploadResearchWorkDocument
+      security:
+        - sessionAuth: []
       summary: Upload a validated source PDF
-      description: Administrator-only. File metadata and storage URLs are not returned.
+      description: >-
+        Administrators may upload to any work. An active teacher may upload only
+        to a work linked to their Professor profile through WorkAdvisor.
+        Teacher uploads are forced to immutable teacher visibility; document
+        promotion is intentionally not available in Phase 1.5.
+        Unauthorized and missing works return the same 404. File metadata and
+        storage URLs are not returned. CSRF protection applies to session clients.
       parameters:
         - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -50,43 +79,113 @@ paths:
               required: [file]
               properties:
                 file: {type: string, format: binary}
-                visibility_scope: {$ref: "#/components/schemas/VisibilityScope"}
+                visibility_scope:
+                  allOf: [{$ref: "#/components/schemas/VisibilityScope"}]
+                  description: Administrators may choose any scope; teachers may use only teacher.
       responses:
-        "201": {description: Source document accepted}
-        "400": {$ref: "#/components/responses/Error"}
+        "201":
+          description: Source document and matching audit event committed
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, request_id]
+                properties:
+                  data:
+                    type: object
+                    required: [id, research_work_id, extraction_status, visibility_scope]
+                    properties:
+                      id: {type: string, format: uuid}
+                      research_work_id: {type: string, format: uuid}
+                      extraction_status: {type: string}
+                      visibility_scope: {$ref: "#/components/schemas/VisibilityScope"}
+                  request_id: {type: string}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /professors:
     get:
+      operationId: listProfessors
       summary: List visible active professors
       parameters:
+        - $ref: "#/components/parameters/RequestId"
         - {name: q, in: query, schema: {type: string}}
       responses:
-        "200": {description: Permission-filtered professor results}
+        "200":
+          description: Permission-filtered professor results
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /professors/{id}:
     get:
+      operationId: getProfessor
       summary: Read a visible professor and related visible works
       parameters:
         - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
       responses:
-        "200": {description: Professor research profile}
+        "200":
+          description: Professor research profile
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /search/semantic:
     post:
+      operationId: semanticSearchNotImplemented
       summary: Semantic search placeholder
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
       responses:
         "501": {$ref: "#/components/responses/NotImplemented"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /ai/teacher-matching:
     post:
+      operationId: teacherMatchingNotImplemented
       summary: AI teacher-matching placeholder
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
       responses:
         "501": {$ref: "#/components/responses/NotImplemented"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
 components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
   parameters:
     Id:
       name: id
       in: path
       required: true
       schema: {type: string, format: uuid}
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >-
+        Optional caller correlation ID. Unsupported characters are removed and
+        values are capped at 128 characters; an ID is generated when absent.
+      schema: {type: string, maxLength: 128}
+    CsrfToken:
+      name: X-CSRFToken
+      in: header
+      required: false
+      description: Required for unsafe requests made with a Django session cookie.
+      schema: {type: string}
+  headers:
+    RequestId:
+      description: Correlation ID shared by the response payload and audit event.
+      schema: {type: string, maxLength: 128}
   schemas:
     VisibilityScope:
       type: string
@@ -112,16 +211,48 @@ components:
         details: {type: object, additionalProperties: true}
         request_id: {type: string}
   responses:
-    Error:
-      description: Structured API error
+    BadRequest:
+      description: Invalid request or document
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: Forbidden request, including CSRF failure with error_code CSRF_FAILED
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
     NotFound:
       description: Missing or inaccessible resource; existence is not disclosed
-    NotImplemented:
-      description: Feature is intentionally deferred for this MVP phase
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
-
+    MethodNotAllowed:
+      description: HTTP method not allowed; the Allow header is preserved
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        Allow:
+          description: Methods supported by this resource.
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    InternalServerError:
+      description: Non-sensitive internal server error
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotImplemented:
+      description: Feature is intentionally deferred for this MVP phase
+      headers:
+        X-Request-ID: {$ref: "#/components/headers/RequestId"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}

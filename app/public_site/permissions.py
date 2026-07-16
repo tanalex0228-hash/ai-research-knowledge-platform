@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING
 
 from django.db.models import QuerySet
 
-from accounts.permissions import visible_scopes_for
+from accounts.permissions import (
+    is_platform_admin,
+    is_platform_teacher,
+    visible_scopes_for,
+)
 
 if TYPE_CHECKING:
     from accounts.models import User
@@ -26,11 +30,28 @@ def user_has_role(user: "User", role_slug: str) -> bool:
 
 
 def is_admin(user: "User") -> bool:
-    return bool(
-        getattr(user, "is_authenticated", False)
-        and getattr(user, "is_active", False)
-        and (getattr(user, "is_superuser", False) or user_has_role(user, "admin"))
-    )
+    return is_platform_admin(user)
+
+
+def manageable_research_works(user: "User") -> QuerySet:
+    """Works whose documents the caller may manage without existence leakage."""
+
+    from research.models import ResearchWork
+
+    if is_platform_admin(user):
+        return ResearchWork.objects.all()
+    if is_platform_teacher(user):
+        return (
+            ResearchWork.objects.filter(
+                advisor_links__professor__user=user,
+                advisor_links__professor__status="active",
+                advisor_links__professor__visibility_scope__in=visible_scopes_for(user),
+                visibility_scope__in=visible_scopes_for(user),
+            )
+            .exclude(status__in=("archived", "rejected"))
+            .distinct()
+        )
+    return ResearchWork.objects.none()
 
 
 def visible_research_works(user: "User") -> QuerySet:

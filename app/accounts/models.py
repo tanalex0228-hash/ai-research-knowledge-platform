@@ -135,6 +135,19 @@ class UserRole(models.Model):
         return f"{self.user} → {self.role.slug}"
 
 
+class AuditLogQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        del kwargs
+        raise ValueError("Audit log records are append-only.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        del objs, fields, batch_size
+        raise ValueError("Audit log records are append-only.")
+
+    def delete(self):
+        raise ValueError("Audit log records are append-only.")
+
+
 class AuditLog(models.Model):
     """Append-only security and governance event metadata.
 
@@ -156,6 +169,8 @@ class AuditLog(models.Model):
     request_id = models.CharField(max_length=128, blank=True, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    objects = AuditLogQuerySet.as_manager()
 
     class Meta:
         ordering = ("-created_at", "id")

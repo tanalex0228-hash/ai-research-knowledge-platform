@@ -76,6 +76,15 @@ class ResearchVisibilityTests(TestCase):
         self.assertEqual(work_author_names(work, user=AnonymousUser()), ["Student author"])
         self.assertEqual(work_author_names(work, user=admin), ["Lin Student"])
 
+    def test_nonpublic_name_stays_anonymous_even_when_row_scope_is_public(self):
+        student = Student.objects.create(
+            display_name="Private Public-Scope Student",
+            visibility_scope=VisibilityScope.PUBLIC,
+            is_name_public=False,
+        )
+
+        self.assertEqual(student.display_name_for(AnonymousUser()), "Student author")
+
 
 class ResearchRelationshipTests(TestCase):
     def test_duplicate_author_position_is_rejected(self):

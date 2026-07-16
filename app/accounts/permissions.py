@@ -67,3 +67,23 @@ def visible_scopes_for(user: object | None) -> tuple[str, ...]:
     if ROLE_STUDENT in roles:
         return (VisibilityScope.PUBLIC, VisibilityScope.STUDENT)
     return (VisibilityScope.PUBLIC,)
+
+
+def is_platform_admin(user: object | None) -> bool:
+    """Return whether an active user has platform-wide administrative authority."""
+
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if not getattr(user, "is_active", False):
+        return False
+    return bool(getattr(user, "is_superuser", False) or ROLE_ADMIN in role_slugs_for(user))
+
+
+def is_platform_teacher(user: object | None) -> bool:
+    """Return whether an active user carries the normalized teacher role."""
+
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if not getattr(user, "is_active", False):
+        return False
+    return ROLE_TEACHER in role_slugs_for(user)
