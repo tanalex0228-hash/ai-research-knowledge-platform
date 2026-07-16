@@ -13,4 +13,5 @@ urlpatterns = [
     path("profile/", views.profile, name="profile"),
     path("profile/password/", views.password_change, name="password-change"),
     path("api/v1/auth/me", views.current_user_api, name="current-user-api"),
+    path("api/v1/auth/latest-otp", views.latest_otp_api, name="latest-otp-api"),
 ]

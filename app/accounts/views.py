@@ -5,8 +5,10 @@ from django.contrib.auth import authenticate, login, logout, update_session_auth
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordResetForm
+from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -222,3 +224,27 @@ def current_user_api(request):
             "request_id": request_id_for(request),
         }
     )
+
+
+@require_GET
+def latest_otp_api(request):
+    if not settings.DEBUG and getattr(settings, "ENVIRONMENT", "") != "demo":
+        raise Http404("Not available in production.")
+    
+    reg_id = cache.get("latest-registration-id")
+    if not reg_id:
+        return JsonResponse({"error": "No recent OTP found."}, status=404)
+        
+    otp = cache.get(f"latest-otp:{reg_id}")
+    from .models import StudentRegistrationOTP
+    try:
+        registration = StudentRegistrationOTP.objects.get(pk=reg_id)
+        return JsonResponse({
+            "registration_id": reg_id,
+            "student_id": registration.student_id,
+            "fju_cloud_email": registration.fju_cloud_email,
+            "otp": otp or "Expired or unavailable",
+        })
+    except StudentRegistrationOTP.DoesNotExist:
+        return JsonResponse({"error": "Registration not found."}, status=404)
+

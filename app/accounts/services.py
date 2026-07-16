@@ -165,6 +165,9 @@ def send_student_registration_otp(
         target_id=registration.id,
         metadata={"student_id": registration.student_id, "department_code": roster_entry.department_code},
     )
+    # Cache the latest plain OTP for 5 minutes for easy developer access
+    cache.set(f"latest-otp:{registration.id}", otp, timeout=300)
+    cache.set("latest-registration-id", str(registration.id), timeout=300)
     return registration
 
 
