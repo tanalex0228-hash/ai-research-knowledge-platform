@@ -1,0 +1,42 @@
+{% extends "public_site/base.html" %}
+{% block title %}登入 / 註冊{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div class="container auth-panel">
+    <p class="eyebrow">Unified authentication</p>
+    <h1 class="display-6 fw-bold">登入 AI 師生研究知識平台</h1>
+    <p class="text-secondary">登入類型只是介面引導；系統會依帳號角色、名冊與權限判定可存取內容。</p>
+  </div>
+</section>
+<section class="container py-5 auth-panel">
+  {% if login_form.non_field_errors %}<div class="alert alert-danger">{{ login_form.non_field_errors }}</div>{% endif %}
+  <form method="post" class="metadata-panel mb-4">
+    {% csrf_token %}
+    <input type="hidden" name="intent" value="login">
+    <div class="mb-3">
+      <label class="form-label" for="{{ login_form.login_type.id_for_label }}">登入類型</label>
+      {{ login_form.login_type }}
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="{{ login_form.identifier.id_for_label }}">帳號 / Email / 學號</label>
+      {{ login_form.identifier }}
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="{{ login_form.password.id_for_label }}">密碼</label>
+      {{ login_form.password }}
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="{{ login_form.captcha_token.id_for_label }}">CAPTCHA token</label>
+      {{ login_form.captcha_token }}
+      <div class="form-text">Local demo 使用 <code>test-pass</code>。</div>
+    </div>
+    <button class="btn btn-primary" type="submit">登入</button>
+    <a class="btn btn-outline-secondary" href="{% url 'accounts:password-reset' %}">忘記密碼</a>
+  </form>
+  <div class="metadata-panel">
+    <h2 class="h5">學生註冊</h2>
+    <p class="text-secondary mb-3">學生註冊必須通過系所名冊與輔仁雲端信箱 OTP 驗證。</p>
+    <a class="btn btn-outline-primary" href="{% url 'accounts:student-register' %}">開始學生註冊</a>
+  </div>
+</section>
+{% endblock %}

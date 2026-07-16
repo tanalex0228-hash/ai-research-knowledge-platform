@@ -54,6 +54,7 @@ MIDDLEWARE = [
     "public_site.middleware.RequestIDMiddleware",
     "public_site.middleware.APIErrorMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -131,6 +132,16 @@ STATIC_URL = "/static/"
 STATIC_ROOT = PROJECT_ROOT / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
+
+
 # Files are served only through the permission-checked download view. Do not map
 # this URL to MEDIA_ROOT in Nginx.
 MEDIA_URL = "/protected-media/"
@@ -139,7 +150,25 @@ MAX_PDF_UPLOAD_BYTES = int(os.getenv("MAX_PDF_UPLOAD_BYTES", str(25 * 1024 * 102
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 LOGIN_URL = "/admin/login/"
+LOGIN_REDIRECT_URL = "/profile/"
+LOGOUT_REDIRECT_URL = "/"
+
+PRIMARY_DEPARTMENT_CODE = os.getenv("PRIMARY_DEPARTMENT_CODE", "FIN")
+STUDENT_EMAIL_DOMAIN_ALLOWLIST = env_list(
+    "STUDENT_EMAIL_DOMAIN_ALLOWLIST",
+    "cloud.fju.edu.tw",
+)
+STUDENT_OTP_TTL_SECONDS = int(os.getenv("STUDENT_OTP_TTL_SECONDS", "600"))
+STUDENT_OTP_MAX_ATTEMPTS = int(os.getenv("STUDENT_OTP_MAX_ATTEMPTS", "5"))
+STUDENT_OTP_COOLDOWN_SECONDS = int(os.getenv("STUDENT_OTP_COOLDOWN_SECONDS", "60"))
+AUTH_RATE_LIMIT_ATTEMPTS = int(os.getenv("AUTH_RATE_LIMIT_ATTEMPTS", "8"))
+AUTH_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "300"))
+CAPTCHA_PROVIDER = os.getenv("CAPTCHA_PROVIDER", "debug" if DEBUG else "turnstile")
+CAPTCHA_DEBUG_BYPASS_TOKEN = os.getenv("CAPTCHA_DEBUG_BYPASS_TOKEN", "test-pass")
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
+AVATAR_MAX_UPLOAD_BYTES = int(os.getenv("AVATAR_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_BROKER_URL = REDIS_URL

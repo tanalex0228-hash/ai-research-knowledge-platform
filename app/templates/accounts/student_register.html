@@ -1,0 +1,14 @@
+{% extends "public_site/base.html" %}
+{% block title %}學生註冊{% endblock %}
+{% block content %}
+<section class="container py-5 auth-panel">
+  <h1 class="h2 mb-3">學生註冊</h1>
+  <p class="text-secondary">只有 student_id 與輔仁雲端信箱精確符合管理員匯入名冊時，系統才會寄送 OTP。</p>
+  {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+  <form method="post" class="metadata-panel">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn btn-primary" type="submit">寄送 OTP</button>
+  </form>
+</section>
+{% endblock %}
