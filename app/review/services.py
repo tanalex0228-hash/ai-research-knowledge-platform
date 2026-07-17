@@ -164,4 +164,192 @@ def decide_review_item(
         locked.save(
             update_fields={"state", "assigned_to", "resolved_at", "updated_at"}
         )
+
+        if resulting_state == ReviewState.APPROVED:
+            promote_value = decided_value if action == ReviewAction.EDIT else locked.candidate_value
+            promote_review_item(locked, promote_value)
+
     return decision
+
+
+def promote_review_item(item: ReviewItem, value: dict | str) -> None:
+    """Promote an approved review item candidate value to canonical catalog tables."""
+
+    from research.models import ResearchWork, WorkField, WorkMethod, RelationshipSource, RelationshipStatus
+    from taxonomy.models import ResearchField, ResearchMethod
+
+    if item.target_type == ReviewTargetType.RESEARCH_WORK:
+        try:
+            work = ResearchWork.objects.get(pk=item.target_id)
+        except ResearchWork.DoesNotExist as exc:
+            raise ValidationError("Target ResearchWork does not exist.") from exc
+
+        field_path = item.field_path
+        extracted_value = value
+        if isinstance(value, dict):
+            extracted_value = value.get("slug") or value.get("value") or value.get("text") or value
+
+        if field_path.startswith("fields"):
+            slug = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
+            field, _ = ResearchField.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    "display_name": slug.replace("-", " ").title(),
+                    "status": "active",
+                }
+            )
+            confidence = item.extraction_result.confidence if item.extraction_result else 1.0
+            WorkField.objects.update_or_create(
+                research_work=work,
+                research_field=field,
+                defaults={
+                    "confidence": confidence,
+                    "source_type": RelationshipSource.AI_APPROVED,
+                    "status": RelationshipStatus.APPROVED,
+                }
+            )
+        elif field_path.startswith("methods"):
+            slug = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
+            method, _ = ResearchMethod.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    "display_name": slug.replace("-", " ").title(),
+                    "status": "active",
+                }
+            )
+            confidence = item.extraction_result.confidence if item.extraction_result else 1.0
+            WorkMethod.objects.update_or_create(
+                research_work=work,
+                research_method=method,
+                defaults={
+                    "confidence": confidence,
+                    "source_type": RelationshipSource.AI_APPROVED,
+                    "status": RelationshipStatus.APPROVED,
+                }
+            )
+        elif field_path == "title":
+            title = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
+            work.title = title
+            work.save(update_fields=["title"])
+        elif field_path == "abstract":
+            abstract = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
+            work.abstract = abstract
+            work.save(update_fields=["abstract"])
+
+
+def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtractionJob:
+    """Create an AI extraction job and scan document chunks for taxonomy matches."""
+
+    from ai.models import PromptVersion, AIRequestLog, AIRequestStatus, AIRequestPurpose
+    from review.models import AIExtractionJob, ExtractionJobStatus, AIExtractionResult, ExtractionResultType, ExtractionResultStatus, ReviewItem, ReviewState
+    from taxonomy.models import ResearchField, ResearchMethod
+    from django.utils import timezone
+
+    # 1. Get or create a PromptVersion for metadata extraction
+    prompt_version, _ = PromptVersion.objects.get_or_create(
+        key="metadata-extraction",
+        version=1,
+        defaults={
+            "template": "Extract research fields and methods.",
+            "status": "active",
+            "output_schema": {"type": "object"},
+        }
+    )
+
+    # 2. Create an AIRequestLog for auditable extraction
+    ai_request = AIRequestLog.objects.create(
+        purpose=AIRequestPurpose.EXTRACTION,
+        prompt_version=prompt_version,
+        requested_by=document.uploaded_by,
+        provider="deterministic",
+        model_name="regex-matcher",
+        input_payload={"document_id": str(document.pk)},
+        status=AIRequestStatus.PENDING,
+        evidence_required=False,
+    )
+
+    # 3. Create the Ingestion Job
+    job = AIExtractionJob.objects.create(
+        source_document=document,
+        prompt_version=prompt_version,
+        ai_request=ai_request,
+        requested_by=document.uploaded_by,
+        visibility_scope=document.visibility_scope,
+        status=ExtractionJobStatus.RUNNING,
+        started_at=timezone.now(),
+    )
+
+    # 4. Scan Chunks for ResearchFields and ResearchMethods
+    chunks = list(document.chunks.all().order_by("chunk_index"))
+
+    from taxonomy.models import TaxonomyStatus
+    fields = list(ResearchField.objects.filter(status=TaxonomyStatus.ACTIVE))
+    methods = list(ResearchMethod.objects.filter(status=TaxonomyStatus.ACTIVE))
+
+    candidates_created = 0
+
+    for field in fields:
+        names_to_check = {field.display_name.lower(), field.slug.lower()}
+        for chunk in chunks:
+            chunk_text_lower = chunk.text.lower()
+            if any(name in chunk_text_lower for name in names_to_check):
+                result = AIExtractionResult.objects.create(
+                    job=job,
+                    result_type=ExtractionResultType.FIELD,
+                    candidate_data={"slug": field.slug},
+                    confidence=1.0,
+                    primary_evidence_chunk=chunk,
+                    schema_version="1",
+                    visibility_scope=document.visibility_scope,
+                    status=ExtractionResultStatus.CANDIDATE,
+                )
+                ReviewItem.objects.create(
+                    extraction_result=result,
+                    target_type=ReviewTargetType.RESEARCH_WORK,
+                    target_id=document.research_work_id,
+                    field_path=f"fields.{field.slug}",
+                    candidate_value={"slug": field.slug},
+                    state=ReviewState.PENDING,
+                    visibility_scope=document.visibility_scope,
+                )
+                candidates_created += 1
+                break
+
+    for method in methods:
+        names_to_check = {method.display_name.lower(), method.slug.lower()}
+        for chunk in chunks:
+            chunk_text_lower = chunk.text.lower()
+            if any(name in chunk_text_lower for name in names_to_check):
+                result = AIExtractionResult.objects.create(
+                    job=job,
+                    result_type=ExtractionResultType.METHOD,
+                    candidate_data={"slug": method.slug},
+                    confidence=1.0,
+                    primary_evidence_chunk=chunk,
+                    schema_version="1",
+                    visibility_scope=document.visibility_scope,
+                    status=ExtractionResultStatus.CANDIDATE,
+                )
+                ReviewItem.objects.create(
+                    extraction_result=result,
+                    target_type=ReviewTargetType.RESEARCH_WORK,
+                    target_id=document.research_work_id,
+                    field_path=f"methods.{method.slug}",
+                    candidate_value={"slug": method.slug},
+                    state=ReviewState.PENDING,
+                    visibility_scope=document.visibility_scope,
+                )
+                candidates_created += 1
+                break
+
+    # 5. Complete Job & Request Log
+    job.status = ExtractionJobStatus.SUCCEEDED
+    job.completed_at = timezone.now()
+    job.save(update_fields=["status", "completed_at"])
+
+    ai_request.output_payload = {"candidates_created": candidates_created}
+    ai_request.status = AIRequestStatus.SUCCEEDED
+    ai_request.completed_at = timezone.now()
+    ai_request.save(update_fields=["output_payload", "status", "completed_at"])
+
+    return job

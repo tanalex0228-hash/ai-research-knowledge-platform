@@ -15,6 +15,10 @@ class ReviewGovernanceMigrationTests(TransactionTestCase):
         old_apps = executor.loader.project_state(self.migrate_from).apps
         self.legacy_ids = self._create_legacy_rows(old_apps)
 
+        from django.db import connections
+        for conn in connections.all():
+            conn.close()
+
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_to)
         self.apps = executor.loader.project_state(self.migrate_to).apps

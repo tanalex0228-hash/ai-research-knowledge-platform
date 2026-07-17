@@ -19,7 +19,6 @@ from rag.models import (
 from rag.services import (
     DeterministicLocalEmbeddingService,
     PermissionAwareRetrievalService,
-    SemanticRetrievalNotImplemented,
     persist_local_embedding,
 )
 from research.models import ResearchWork, ResearchWorkStatus, ResearchWorkType
@@ -154,15 +153,24 @@ class PermissionAwareRetrievalTests(DocumentFixtureMixin, TestCase):
         self.assertEqual([citation.document_chunk for citation in result.citations], [student_chunk])
         self.assertIn(VisibilityScope.STUDENT, result.log.permitted_document_scopes)
 
-    def test_semantic_attempt_is_audited_and_stops(self):
+    def test_semantic_retrieval_success(self):
+        chunk = self.make_chunk(suffix="semantic", text="This is dynamic AI finance information.")
+        vector_document = VectorDocument.objects.create(source_document=chunk.source_document)
+        checksum = hashlib.sha256(chunk.text.encode()).hexdigest()
+        vector_chunk = VectorChunk.objects.create(
+            vector_document=vector_document,
+            source_chunk=chunk,
+            content_checksum=checksum,
+            status="ready",
+        )
+        persist_local_embedding(vector_chunk)
+
         service = PermissionAwareRetrievalService()
+        result = service.retrieve_semantic("AI finance", user=AnonymousUser())
 
-        with self.assertRaises(SemanticRetrievalNotImplemented):
-            service.retrieve_semantic("AI finance", user=AnonymousUser())
-
-        log = RetrievalLog.objects.get()
-        self.assertEqual(log.status, RetrievalStatus.NOT_IMPLEMENTED)
-        self.assertEqual(log.result_count, 0)
+        self.assertEqual(result.log.status, RetrievalStatus.COMPLETED)
+        self.assertEqual(result.log.result_count, 1)
+        self.assertEqual(result.citations[0].document_chunk, chunk)
 
     def test_token_free_query_cannot_return_all_chunks(self):
         self.make_chunk(suffix="no-browse", text="private-ish catalog evidence")

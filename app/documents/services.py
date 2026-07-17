@@ -68,5 +68,10 @@ def open_document_for_download(document: SourceDocument):
 
 
 def queue_document_extraction(document: SourceDocument) -> None:
-    del document
-    raise NotImplementedError("PDF extraction is scheduled for Phase 2.")
+    from .choices import ExtractionStatus
+    from .tasks import extract_source_document
+
+    document.extraction_status = ExtractionStatus.QUEUED
+    document.save(update_fields=["extraction_status"])
+    transaction.on_commit(lambda: extract_source_document.delay(str(document.pk)))
+

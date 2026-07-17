@@ -10,9 +10,10 @@ from django.views.decorators.csrf import csrf_exempt
 
 from accounts.services import record_audit_event
 from documents.choices import VisibilityScope
-from documents.services import create_source_document
+from documents.services import create_source_document, queue_document_extraction
 from professors.models import Professor
 from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
+from research.services import transition_research_work
 from taxonomy.models import ResearchField, ResearchMethod
 
 from .api_errors import api_error_response
@@ -171,6 +172,14 @@ def research_work_document_upload(request, work_id):
                 uploaded_by=request.user,
                 visibility_scope=visibility_scope,
             )
+            if work.status == "draft":
+                transition_research_work(
+                    research_work=work,
+                    to_status="uploaded",
+                    actor=request.user,
+                    reason="Document PDF uploaded successfully.",
+                    request_id=request_id,
+                )
             record_audit_event(
                 event_type="source_document.uploaded",
                 actor=request.user,
@@ -182,6 +191,7 @@ def research_work_document_upload(request, work_id):
                     "visibility_scope": document.visibility_scope,
                 },
             )
+            queue_document_extraction(document)
     except ValidationError as exc:
         details = getattr(exc, "message_dict", {"file": exc.messages})
         return _error(request, "INVALID_DOCUMENT", "The document was rejected.", 400, details)
@@ -208,12 +218,65 @@ def research_work_document_upload(request, work_id):
 @csrf_exempt
 @require_POST
 def semantic_search(request):
-    return _error(
-        request,
-        "SEMANTIC_SEARCH_NOT_IMPLEMENTED",
-        "Semantic search is scheduled for Phase 2. Use the permission-filtered keyword search for now.",
-        501,
-    )
+    import json
+    request_id = _request_id(request)
+
+    query = ""
+    limit = 10
+    filters = {}
+    if request.content_type == "application/json":
+        try:
+            body = json.loads(request.body)
+            query = body.get("q") or body.get("query") or ""
+            limit = int(body.get("limit", 10))
+            filters = body.get("filters") or {}
+        except Exception:
+            return _error(request, "BAD_REQUEST", "Invalid JSON body.", 400)
+    else:
+        query = request.POST.get("q") or request.POST.get("query") or ""
+        try:
+            limit = int(request.POST.get("limit", 10))
+        except ValueError:
+            pass
+
+    query = str(query).strip()
+    if not query:
+        return _error(request, "BAD_REQUEST", "Query parameter 'q' or 'query' is required.", 400)
+
+    from rag.services.retrieval import PermissionAwareRetrievalService
+    service = PermissionAwareRetrievalService()
+    try:
+        result = service.retrieve_semantic(
+            query=query,
+            user=request.user,
+            limit=limit,
+            filters=filters,
+        )
+    except Exception as exc:
+        return _error(request, "BAD_REQUEST", str(exc), 400)
+
+    citations_data = []
+    for c in result.citations:
+        work = c.document_chunk.source_document.research_work
+        citations_data.append({
+            "id": str(c.id),
+            "rank": c.rank,
+            "score": c.score,
+            "excerpt": c.excerpt,
+            "page_start": c.page_start,
+            "page_end": c.page_end,
+            "research_work": {
+                "id": str(work.id),
+                "title": work.title,
+                "year": work.year,
+            }
+        })
+
+    return JsonResponse({
+        "query": query,
+        "results": citations_data,
+        "request_id": request_id,
+    })
 
 
 @csrf_exempt

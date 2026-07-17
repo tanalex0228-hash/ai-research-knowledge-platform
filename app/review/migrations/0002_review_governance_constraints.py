@@ -36,6 +36,8 @@ def normalize_legacy_review_items(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    atomic = False
+
     dependencies = [
         ("review", "0001_initial"),
     ]

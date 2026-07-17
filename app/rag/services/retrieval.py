@@ -157,8 +157,6 @@ class PermissionAwareRetrievalService:
         limit: int = 10,
         filters: dict | None = None,
     ) -> RetrievalResult:
-        """Audit the attempt, then stop instead of running an unreviewed pipeline."""
-
         query = " ".join(str(query).split())
         if not query:
             raise ValueError("query must not be empty")
@@ -166,6 +164,14 @@ class PermissionAwareRetrievalService:
             raise ValueError(f"limit must be between 1 and {self.max_limit}")
         if filters is not None and not isinstance(filters, dict):
             raise TypeError("filters must be a dictionary")
+        filters = filters or {}
+        unsupported_filters = set(filters) - {"research_work_id", "year"}
+        if unsupported_filters:
+            raise ValueError(
+                "unsupported retrieval filters: "
+                + ", ".join(sorted(unsupported_filters))
+            )
+
         access = RetrievalAccess.for_user(user)
         log = RetrievalLog.objects.create(
             requested_by=access.actor,
@@ -173,15 +179,75 @@ class PermissionAwareRetrievalService:
             retrieval_kind=RetrievalKind.SEMANTIC,
             permitted_document_scopes=list(access.document_scopes),
             permitted_research_scopes=list(access.research_scopes),
-            filters=filters or {},
-            status=RetrievalStatus.NOT_IMPLEMENTED,
-            failure_code="semantic_retrieval_not_implemented",
-            failure_detail=(
-                "pgvector ranking remains disabled until permission and relevance "
-                "benchmarks are implemented."
-            ),
-            completed_at=timezone.now(),
+            filters=filters,
         )
-        raise SemanticRetrievalNotImplemented(
-            f"Semantic retrieval is not implemented (retrieval_log={log.id})."
+
+        from rag.services.embeddings import DeterministicLocalEmbeddingService
+        embedder = DeterministicLocalEmbeddingService()
+        query_vector = embedder.embed_text(query)
+
+        from django.db import connection as db_connection
+        from rag.models import EmbeddingRecord
+
+        embedding_qs = EmbeddingRecord.objects.select_related(
+            "vector_chunk__source_chunk__source_document__research_work"
+        ).filter(
+            is_active=True,
+            vector_chunk__status="ready",
+            vector_chunk__visibility_scope__in=access.document_scopes,
+            vector_chunk__vector_document__visibility_scope__in=access.document_scopes,
+            vector_chunk__source_chunk__source_document__visibility_scope__in=access.document_scopes,
+            vector_chunk__source_chunk__source_document__research_work__visibility_scope__in=access.research_scopes,
+            vector_chunk__source_chunk__source_document__research_work__status="published",
         )
+
+        if "research_work_id" in filters:
+            embedding_qs = embedding_qs.filter(
+                vector_chunk__source_chunk__source_document__research_work_id=filters["research_work_id"]
+            )
+        if "year" in filters:
+            embedding_qs = embedding_qs.filter(
+                vector_chunk__source_chunk__source_document__research_work__year=filters["year"]
+            )
+
+        if db_connection.vendor == "postgresql":
+            from pgvector.django import CosineDistance
+            embedding_qs = embedding_qs.annotate(
+                distance=CosineDistance("embedding", query_vector)
+            ).order_by("distance")[:limit]
+
+            records = list(embedding_qs)
+            results_data = []
+            for r in records:
+                score = max(0.0, min(1.0, 1.0 - float(r.distance)))
+                results_data.append((r.vector_chunk.source_chunk, score))
+        else:
+            records = list(embedding_qs)
+            scored_records = []
+            for r in records:
+                vec = r.embedding
+                dot_product = sum(a * b for a, b in zip(query_vector, vec))
+                score = max(0.0, min(1.0, dot_product))
+                scored_records.append((r, score))
+            scored_records.sort(key=lambda x: x[1], reverse=True)
+            results_data = [(item[0].vector_chunk.source_chunk, item[1]) for item in scored_records[:limit]]
+
+        citations: list[CitationSource] = []
+        for rank, (chunk, score) in enumerate(results_data, start=1):
+            citation = CitationSource.objects.create(
+                retrieval_log=log,
+                document_chunk=chunk,
+                rank=rank,
+                score=score,
+                excerpt=self._excerpt(chunk.text),
+                visibility_scope=chunk.visibility_scope,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+            )
+            citations.append(citation)
+
+        log.status = RetrievalStatus.COMPLETED
+        log.result_count = len(citations)
+        log.completed_at = timezone.now()
+        log.save(update_fields={"status", "result_count", "completed_at"})
+        return RetrievalResult(log=log, citations=tuple(citations))

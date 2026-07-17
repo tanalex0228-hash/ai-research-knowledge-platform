@@ -263,13 +263,8 @@ class ApiTests(TestCase):
         self.assertFalse(SourceDocument.objects.exists())
 
     def test_deferred_ai_endpoints_are_explicit_stubs(self):
-        semantic = self.client.post(reverse("api-v1:semantic-search"), data={})
         matching = self.client.post(reverse("api-v1:teacher-matching"), data={})
 
-        self.assertEqual(semantic.status_code, 501)
-        self.assertEqual(
-            semantic.json()["error_code"], "SEMANTIC_SEARCH_NOT_IMPLEMENTED"
-        )
         self.assertEqual(matching.status_code, 501)
         self.assertEqual(
             matching.json()["error_code"], "TEACHER_MATCHING_NOT_IMPLEMENTED"
@@ -277,13 +272,62 @@ class ApiTests(TestCase):
 
         csrf_client = Client(enforce_csrf_checks=True)
         self.assertEqual(
-            csrf_client.post(reverse("api-v1:semantic-search"), data={}).status_code,
-            501,
-        )
-        self.assertEqual(
             csrf_client.post(reverse("api-v1:teacher-matching"), data={}).status_code,
             501,
         )
+
+    def test_semantic_search_endpoint(self):
+        from documents.models import DocumentChunk
+        from rag.models import VectorDocument, VectorChunk, VectorStatus
+        from rag.services.embeddings import persist_local_embedding
+        import hashlib
+
+        doc = SourceDocument.objects.create(
+            research_work=self.work,
+            file=SimpleUploadedFile("doc.pdf", b"%PDF-1.4\n%%EOF", content_type="application/pdf"),
+            uploaded_by=self.admin,
+            visibility_scope="public",
+        )
+        chunk = DocumentChunk.objects.create(
+            source_document=doc,
+            chunk_index=0,
+            page_start=1,
+            page_end=1,
+            char_start=0,
+            char_end=20,
+            text="This chunk is about AI Finance and ESG principles.",
+            token_count=10,
+            chunk_strategy_version="page_v1",
+            visibility_scope="public",
+        )
+        vdoc = VectorDocument.objects.create(
+            source_document=doc,
+            status=VectorStatus.READY,
+            visibility_scope="public",
+        )
+        vchunk = VectorChunk.objects.create(
+            vector_document=vdoc,
+            source_chunk=chunk,
+            status=VectorStatus.READY,
+            visibility_scope="public",
+            content_checksum=hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
+        )
+
+        persist_local_embedding(vchunk)
+
+        response = self.client.post(reverse("api-v1:semantic-search"), data={})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error_code"], "BAD_REQUEST")
+
+        response = self.client.post(
+            reverse("api-v1:semantic-search"),
+            data={"q": "AI Finance"},
+        )
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        self.assertEqual(len(results), 1)
+        self.assertIn("AI Finance", results[0]["excerpt"])
+        self.assertEqual(results[0]["research_work"]["id"], str(self.work.id))
 
     def test_unknown_resources_have_generic_not_found_response(self):
         response = self.client.get(
