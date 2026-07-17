@@ -161,75 +161,118 @@ def research_work_detail(request, work_id):
 @require_GET
 def search(request):
     query = request.GET.get("q", "").strip()
+    search_type = request.GET.get("search_type", "keyword").strip()
     year = request.GET.get("year", "").strip()
     work_type = request.GET.get("work_type", "").strip()
     field = request.GET.get("field", "").strip()
     method = request.GET.get("method", "").strip()
 
-    queryset = visible_research_works(request.user)
-    if query:
-        needle = normalize_taxonomy_label(query)
-        visible_professor_ids = visible_professors(request.user).values("id")
-        matching_field_ids = [
-            item.id
-            for item in ResearchField.objects.discoverable_to(request.user)
-            if any(
-                needle in normalize_taxonomy_label(candidate)
-                for candidate in [item.display_name, item.slug, *item.aliases]
+    semantic_results = []
+    page = None
+    is_semantic = (search_type == "semantic" and bool(query))
+
+    if is_semantic:
+        from rag.services.retrieval import PermissionAwareRetrievalService
+        service = PermissionAwareRetrievalService()
+        filters = {}
+        if year.isdigit():
+            filters["year"] = int(year)
+        try:
+            retrieval_res = service.retrieve_semantic(
+                query=query,
+                user=request.user,
+                limit=20,
+                filters=filters,
             )
-        ]
-        matching_method_ids = [
-            item.id
-            for item in ResearchMethod.objects.discoverable_to(request.user)
-            if any(
-                needle in normalize_taxonomy_label(candidate)
-                for candidate in [item.display_name, item.slug, *item.aliases]
+            seen_works = set()
+            for citation in retrieval_res.citations:
+                work = citation.document_chunk.source_document.research_work
+                if work_type and work.work_type != work_type:
+                    continue
+                if field and not work.field_links.filter(research_field__slug=field, status="approved").exists():
+                    continue
+                if method and not work.method_links.filter(research_method__slug=method, status="approved").exists():
+                    continue
+
+                if work.id not in seen_works:
+                    seen_works.add(work.id)
+                    semantic_results.append({
+                        "work": work,
+                        "score": citation.score,
+                        "excerpt": citation.excerpt,
+                        "page_start": citation.page_start,
+                    })
+        except Exception:
+            pass
+    else:
+        queryset = visible_research_works(request.user)
+        if query:
+            needle = normalize_taxonomy_label(query)
+            visible_professor_ids = visible_professors(request.user).values("id")
+            matching_field_ids = [
+                item.id
+                for item in ResearchField.objects.discoverable_to(request.user)
+                if any(
+                    needle in normalize_taxonomy_label(candidate)
+                    for candidate in [item.display_name, item.slug, *item.aliases]
+                )
+            ]
+            matching_method_ids = [
+                item.id
+                for item in ResearchMethod.objects.discoverable_to(request.user)
+                if any(
+                    needle in normalize_taxonomy_label(candidate)
+                    for candidate in [item.display_name, item.slug, *item.aliases]
+                )
+            ]
+            queryset = queryset.filter(
+                Q(title__icontains=query)
+                | Q(abstract__icontains=query)
+                | Q(
+                    advisor_links__professor_id__in=visible_professor_ids,
+                    advisor_links__professor__display_name__icontains=query,
+                )
+                | Q(
+                    field_links__research_field_id__in=matching_field_ids,
+                    field_links__status="approved",
+                )
+                | Q(
+                    method_links__research_method_id__in=matching_method_ids,
+                    method_links__status="approved",
+                )
             )
-        ]
-        queryset = queryset.filter(
-            Q(title__icontains=query)
-            | Q(abstract__icontains=query)
-            | Q(
-                advisor_links__professor_id__in=visible_professor_ids,
-                advisor_links__professor__display_name__icontains=query,
-            )
-            | Q(
-                field_links__research_field_id__in=matching_field_ids,
+        if year.isdigit():
+            queryset = queryset.filter(year=int(year))
+        if work_type:
+            queryset = queryset.filter(work_type=work_type)
+        if field:
+            visible_field_ids = ResearchField.objects.discoverable_to(request.user).filter(
+                slug=field
+            ).values("id")
+            queryset = queryset.filter(
+                field_links__research_field_id__in=visible_field_ids,
                 field_links__status="approved",
             )
-            | Q(
-                method_links__research_method_id__in=matching_method_ids,
+        if method:
+            visible_method_ids = ResearchMethod.objects.discoverable_to(request.user).filter(
+                slug=method
+            ).values("id")
+            queryset = queryset.filter(
+                method_links__research_method_id__in=visible_method_ids,
                 method_links__status="approved",
             )
-        )
-    if year.isdigit():
-        queryset = queryset.filter(year=int(year))
-    if work_type:
-        queryset = queryset.filter(work_type=work_type)
-    if field:
-        visible_field_ids = ResearchField.objects.discoverable_to(request.user).filter(
-            slug=field
-        ).values("id")
-        queryset = queryset.filter(
-            field_links__research_field_id__in=visible_field_ids,
-            field_links__status="approved",
-        )
-    if method:
-        visible_method_ids = ResearchMethod.objects.discoverable_to(request.user).filter(
-            slug=method
-        ).values("id")
-        queryset = queryset.filter(
-            method_links__research_method_id__in=visible_method_ids,
-            method_links__status="approved",
-        )
 
-    queryset = queryset.distinct().order_by("-year", "title")
-    page = Paginator(queryset, 20).get_page(request.GET.get("page"))
+        queryset = queryset.distinct().order_by("-year", "title")
+        page = Paginator(queryset, 20).get_page(request.GET.get("page"))
+
     return render(
         request,
         "public_site/search.html",
         {
             "page_obj": page,
+            "semantic_results": semantic_results,
+            "is_semantic": is_semantic,
+            "search_type": search_type,
             "query": query,
             "selected_year": year,
             "selected_work_type": work_type,
