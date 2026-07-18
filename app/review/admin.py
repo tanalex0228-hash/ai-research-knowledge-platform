@@ -75,13 +75,14 @@ class AIExtractionResultAdmin(admin.ModelAdmin):
 class ReviewItemAdmin(admin.ModelAdmin):
     list_display = (
         "field_path",
-        "target_type",
+        "work_title",
+        "candidate_preview",
+        "confidence_display",
         "state",
-        "assigned_to",
         "visibility_scope",
         "created_at",
     )
-    list_filter = ("state", "target_type", "visibility_scope", "created_at")
+    list_filter = ("state", "target_type", "visibility_scope", "created_at", "field_path")
     search_fields = ("id", "field_path", "target_id")
     raw_id_fields = ("extraction_result", "assigned_to")
     readonly_fields = tuple(field.name for field in ReviewItem._meta.fields)
@@ -92,6 +93,40 @@ class ReviewItemAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.display(description="Research Work")
+    def work_title(self, obj):
+        from research.models import ResearchWork
+        from django.utils.html import format_html
+        try:
+            work = ResearchWork.objects.get(pk=obj.target_id)
+            return format_html(
+                '<span title="{}" style="font-size:0.85rem;">{}</span>',
+                work.title, work.title[:40] + ("…" if len(work.title) > 40 else "")
+            )
+        except Exception:
+            return str(obj.target_id)[:20]
+
+    @admin.display(description="Candidate Value")
+    def candidate_preview(self, obj):
+        from django.utils.html import format_html
+        val = obj.candidate_value
+        if isinstance(val, dict):
+            display = val.get("value") or val.get("slug") or str(val)
+        else:
+            display = str(val)
+        preview = str(display)[:60]
+        return format_html('<code style="font-size:0.8rem;">{}</code>', preview)
+
+    @admin.display(description="Confidence")
+    def confidence_display(self, obj):
+        from django.utils.html import format_html
+        pct = int((obj.confidence or 0) * 100)
+        color = "#27ae60" if pct >= 90 else "#e67e22" if pct >= 70 else "#e74c3c"
+        return format_html(
+            '<span style="color:{};font-weight:bold;">{} %</span>',
+            color, pct
+        )
 
     def _apply_decision(self, request, queryset, *, action, reason):
         succeeded = 0
@@ -122,7 +157,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
                 level=messages.WARNING,
             )
 
-    @admin.action(description="Approve selected through governed decisions")
+    @admin.action(description="✅ Approve selected")
     def approve_selected(self, request, queryset):
         self._apply_decision(
             request,
@@ -131,7 +166,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
             reason="Approved through the Django admin governed action.",
         )
 
-    @admin.action(description="Reject selected through governed decisions")
+    @admin.action(description="❌ Reject selected")
     def reject_selected(self, request, queryset):
         self._apply_decision(
             request,
@@ -140,7 +175,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
             reason="Rejected through the Django admin governed action.",
         )
 
-    @admin.action(description="Archive selected through governed decisions")
+    @admin.action(description="🗄 Archive selected")
     def archive_selected(self, request, queryset):
         self._apply_decision(
             request,
