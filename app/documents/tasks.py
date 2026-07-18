@@ -44,7 +44,7 @@ def extract_source_document(document_id: str) -> None:
         total_text = ""
         page_texts = []
         for i, page in enumerate(doc):
-            text = page.get_text("text")
+            text = page.get_text("text").replace("\x00", "")
             page_texts.append((i + 1, text))
             total_text += text
 

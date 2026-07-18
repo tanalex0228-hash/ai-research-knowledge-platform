@@ -15,15 +15,20 @@ def create_source_document(
     research_work,
     uploaded_file,
     uploaded_by,
-    visibility_scope: str = VisibilityScope.ADMIN,
+    visibility_scope: str | None = None,
 ) -> SourceDocument:
-    """Create a validated private document without returning a storage URL."""
+    """Create a validated private document without returning a storage URL.
 
+    If *visibility_scope* is omitted, the document inherits the parent
+    ResearchWork's visibility so publicly-available works are immediately
+    accessible via the download endpoint.
+    """
+    effective_scope = visibility_scope if visibility_scope is not None else research_work.visibility_scope
     document = SourceDocument(
         research_work=research_work,
         file=uploaded_file,
         uploaded_by=uploaded_by,
-        visibility_scope=visibility_scope,
+        visibility_scope=effective_scope,
     )
     try:
         document.save()

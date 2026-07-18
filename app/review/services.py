@@ -488,14 +488,14 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
 
     # Extract Authors
     from research.models import Student
-    from accounts.models import StudentRoster
+    from accounts.models import UserProfile
     authors_found = []
     for student in Student.objects.filter(status="active"):
         if student.display_name in all_chunks_text:
             authors_found.append(student.display_name)
-    for roster in StudentRoster.objects.all():
-        if roster.display_name in all_chunks_text and roster.display_name not in authors_found:
-            authors_found.append(roster.display_name)
+    for profile in UserProfile.objects.exclude(display_name=""):
+        if profile.display_name in all_chunks_text and profile.display_name not in authors_found:
+            authors_found.append(profile.display_name)
     student_matches = re.finditer(r'(學生|作者|撰寫人)[:：\s]+([\u4e00-\u9fa5]{2,4}(?:[、，\s]+[\u4e00-\u9fa5]{2,4})*)', all_chunks_text)
     for match in student_matches:
         names = re.split(r'[、，\s]+', match.group(2).strip())
