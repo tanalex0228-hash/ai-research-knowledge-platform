@@ -1,5 +1,6 @@
 {% extends "public_site/base.html" %}
 {% block title %}教師探索｜AI 師生研究知識平台{% endblock %}
+{% block assistant_page_type %}professor_list{% endblock %}
 {% block content %}
 <section class="page-header"><div class="container"><p class="eyebrow">Professors</p><h1>教師研究探索</h1><p>從教師歷年公開研究了解其領域、方法與指導成果。</p></div></section>
 <section class="container py-5">
@@ -11,4 +12,3 @@
   {% include "public_site/partials/pagination.html" %}
 </section>
 {% endblock %}
-

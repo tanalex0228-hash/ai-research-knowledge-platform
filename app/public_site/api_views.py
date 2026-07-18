@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
@@ -9,6 +11,13 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 
 from accounts.services import record_audit_event
+from ai.models import (
+    AssistantMessage,
+    AssistantMessageRole,
+    AssistantSession,
+    AssistantSessionStatus,
+)
+from ai.services.research_navigator import ResearchNavigatorService
 from documents.choices import VisibilityScope
 from documents.services import create_source_document, queue_document_extraction
 from professors.models import Professor
@@ -67,6 +76,172 @@ def _professor_payload(professor: Professor, user, works=None) -> dict:
     if works is not None:
         payload["research_works"] = [_work_payload(work) for work in works]
     return payload
+
+
+def _json_body(request) -> dict:
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValidationError({"body": "Invalid JSON body."})
+    if not isinstance(body, dict):
+        raise ValidationError({"body": "JSON body must be an object."})
+    return body
+
+
+def _assistant_owner_kwargs(request, *, create_session_key: bool = False) -> dict:
+    if getattr(request.user, "is_authenticated", False):
+        return {"user": request.user}
+    if create_session_key and not request.session.session_key:
+        request.session.save()
+    session_key = request.session.session_key
+    if not session_key:
+        return {"user__isnull": True, "django_session_key": "__no_browser_session__"}
+    return {"user__isnull": True, "django_session_key": session_key}
+
+
+def _active_assistant_session(request, *, create: bool = False) -> AssistantSession | None:
+    owner_kwargs = _assistant_owner_kwargs(request, create_session_key=create)
+    session = (
+        AssistantSession.objects.filter(
+            **owner_kwargs,
+            status=AssistantSessionStatus.ACTIVE,
+        )
+        .order_by("-updated_at", "-created_at")
+        .first()
+    )
+    if session or not create:
+        return session
+    return AssistantSession.objects.create(
+        user=request.user if getattr(request.user, "is_authenticated", False) else None,
+        django_session_key=request.session.session_key or "",
+    )
+
+
+def _assistant_message_payload(message: AssistantMessage) -> dict:
+    return {
+        "id": str(message.id),
+        "role": message.role,
+        "content": message.content,
+        "page_context": message.page_context,
+        "citations": message.citations,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+def _assistant_session_payload(session: AssistantSession | None) -> dict:
+    if session is None:
+        return {"session": None, "messages": []}
+    return {
+        "session": {
+            "id": str(session.id),
+            "status": session.status,
+            "started_at": session.started_at.isoformat(),
+            "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+            "last_context": session.last_context,
+        },
+        "messages": [
+            _assistant_message_payload(message)
+            for message in session.messages.order_by("created_at", "id")[:80]
+        ],
+    }
+
+
+@require_GET
+def assistant_session(request):
+    session = _active_assistant_session(request)
+    return JsonResponse(
+        {"data": _assistant_session_payload(session), "request_id": _request_id(request)}
+    )
+
+
+@require_POST
+def assistant_message(request):
+    try:
+        body = _json_body(request)
+    except ValidationError as exc:
+        return _error(
+            request,
+            "BAD_REQUEST",
+            "Invalid JSON body.",
+            400,
+            exc.message_dict,
+        )
+
+    question = str(body.get("message") or body.get("question") or "").strip()
+    if not question:
+        return _error(request, "BAD_REQUEST", "Message is required.", 400)
+    if len(question) > 4000:
+        return _error(request, "BAD_REQUEST", "Message is too long.", 400)
+
+    page_context = body.get("page_context") or {}
+    if not isinstance(page_context, dict):
+        return _error(request, "BAD_REQUEST", "page_context must be an object.", 400)
+
+    session = _active_assistant_session(request, create=True)
+    assert session is not None
+
+    with transaction.atomic():
+        user_message = AssistantMessage.objects.create(
+            session=session,
+            role=AssistantMessageRole.USER,
+            content=question,
+            page_context=page_context,
+        )
+        history = [
+            {"role": message.role, "content": message.content}
+            for message in session.messages.order_by("created_at", "id")
+        ]
+        result = ResearchNavigatorService().answer(
+            user=request.user,
+            question=question,
+            page_context=page_context,
+            conversation_history=history,
+        )
+        assistant_reply = AssistantMessage.objects.create(
+            session=session,
+            role=AssistantMessageRole.ASSISTANT,
+            content=result["answer"],
+            page_context=result["page_context"],
+            citations=result["citations"],
+        )
+        session.last_context = result["page_context"]
+        session.save(update_fields={"last_context", "updated_at"})
+
+    return JsonResponse(
+        {
+            "data": {
+                "session": {
+                    "id": str(session.id),
+                    "status": session.status,
+                    "started_at": session.started_at.isoformat(),
+                    "ended_at": None,
+                    "last_context": session.last_context,
+                },
+                "user_message": _assistant_message_payload(user_message),
+                "assistant_message": _assistant_message_payload(assistant_reply),
+                "citations": result["citations"],
+                "page_context": result["page_context"],
+            },
+            "request_id": _request_id(request),
+        },
+        status=201,
+    )
+
+
+@require_POST
+def assistant_end(request):
+    session = _active_assistant_session(request)
+    if session is not None:
+        session.end()
+    return JsonResponse(
+        {
+            "data": {
+                "ended": session is not None,
+                "session_id": str(session.id) if session else None,
+            },
+            "request_id": _request_id(request),
+        }
+    )
 
 
 @require_GET

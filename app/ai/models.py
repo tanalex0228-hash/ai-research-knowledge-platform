@@ -203,3 +203,118 @@ class AIRequestLog(models.Model):
             update_fields={"status", "error_code", "error_detail", "completed_at"}
         )
 
+
+class AssistantSessionStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    ENDED = "ended", "Ended"
+
+
+class AssistantMessageRole(models.TextChoices):
+    USER = "user", "User"
+    ASSISTANT = "assistant", "Assistant"
+
+
+class AssistantSession(models.Model):
+    """A page-aware research navigator conversation isolated per user/session."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="assistant_sessions",
+    )
+    django_session_key = models.CharField(max_length=80, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=16,
+        choices=AssistantSessionStatus.choices,
+        default=AssistantSessionStatus.ACTIVE,
+        db_index=True,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    last_context = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at", "-created_at")
+        indexes = [
+            models.Index(fields=("user", "status", "-updated_at")),
+            models.Index(fields=("django_session_key", "status", "-updated_at")),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(user__isnull=False) | ~Q(django_session_key=""),
+                name="ai_assistant_session_has_owner_or_browser_session",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status=AssistantSessionStatus.ACTIVE, ended_at__isnull=True)
+                    | Q(status=AssistantSessionStatus.ENDED, ended_at__isnull=False)
+                ),
+                name="ai_assistant_session_status_ended_at_consistent",
+            ),
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if self.user_id is None and not self.django_session_key:
+            raise ValidationError("Anonymous assistant sessions require a session key.")
+        if self.status == AssistantSessionStatus.ACTIVE and self.ended_at is not None:
+            raise ValidationError({"ended_at": "Active sessions cannot have ended_at."})
+        if self.status == AssistantSessionStatus.ENDED and self.ended_at is None:
+            raise ValidationError({"ended_at": "Ended sessions require ended_at."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def end(self) -> None:
+        self.status = AssistantSessionStatus.ENDED
+        self.ended_at = timezone.now()
+        self.save(update_fields={"status", "ended_at", "updated_at"})
+
+    def __str__(self) -> str:
+        owner = self.user_id or self.django_session_key
+        return f"Assistant session {self.id} ({owner})"
+
+
+class AssistantMessage(models.Model):
+    """Persisted chat record; assistant content may include citations."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        AssistantSession,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    role = models.CharField(max_length=16, choices=AssistantMessageRole.choices)
+    content = models.TextField()
+    page_context = models.JSONField(default=dict, blank=True)
+    citations = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at", "id")
+        indexes = [
+            models.Index(fields=("session", "created_at")),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(content=""),
+                name="ai_assistant_message_content_not_empty",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if not isinstance(self.page_context, dict):
+            raise ValidationError({"page_context": "Page context must be an object."})
+        if not isinstance(self.citations, list):
+            raise ValidationError({"citations": "Citations must be a list."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)

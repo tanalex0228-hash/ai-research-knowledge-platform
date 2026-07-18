@@ -1,5 +1,7 @@
 {% extends "public_site/base.html" %}
 {% block title %}{{ professor.display_name }}｜教師研究頁{% endblock %}
+{% block assistant_page_type %}professor{% endblock %}
+{% block assistant_object_id %}{{ professor.id }}{% endblock %}
 {% block extra_head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>{% endblock %}
 {% block content %}
 <section class="page-header"><div class="container"><p class="eyebrow">Professor Research Profile</p><h1>{{ professor.display_name }}</h1><p>{{ professor.title }}{% if professor.office %} · {{ professor.office }}{% endif %}</p></div></section>

@@ -1,5 +1,7 @@
 {% extends "public_site/base.html" %}
 {% block title %}研究搜尋｜AI 師生研究知識平台{% endblock %}
+{% block assistant_page_type %}search{% endblock %}
+{% block assistant_search_query %}{{ query }}{% endblock %}
 {% block content %}
 <section class="page-header"><div class="container"><p class="eyebrow">Search Engine · Phase 2 & 3</p><h1>研究搜尋</h1><p>提供基於 pgvector 向量與權限過濾的 AI 語意搜尋，以及經典關鍵字搜尋與分類篩選。</p></div></section>
 <section class="container py-5"><form method="get" class="filter-panel mb-5" role="search">
@@ -38,4 +40,3 @@
   {% include "public_site/partials/pagination.html" %}
 </section>
 {% endblock %}
-

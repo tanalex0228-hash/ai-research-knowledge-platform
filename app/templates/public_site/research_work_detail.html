@@ -1,5 +1,7 @@
 {% extends "public_site/base.html" %}
 {% block title %}{{ work.title }}｜師生研究平台{% endblock %}
+{% block assistant_page_type %}research_work{% endblock %}
+{% block assistant_object_id %}{{ work.id }}{% endblock %}
 {% block content %}
 
 <article class="work-detail-page">

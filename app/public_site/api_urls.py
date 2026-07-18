@@ -16,5 +16,7 @@ urlpatterns = [
     path("professors/<uuid:professor_id>", api_views.professor_detail, name="professor-detail"),
     path("search/semantic", api_views.semantic_search, name="semantic-search"),
     path("ai/teacher-matching", api_views.teacher_matching, name="teacher-matching"),
+    path("ai/assistant/session", api_views.assistant_session, name="assistant-session"),
+    path("ai/assistant/messages", api_views.assistant_message, name="assistant-message"),
+    path("ai/assistant/end", api_views.assistant_end, name="assistant-end"),
 ]
-

@@ -5,12 +5,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="AI 師生研究知識平台：探索教師、研究作品、方法與領域。">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{% block title %}AI 師生研究知識平台{% endblock %}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="{% static 'public_site/site.css' %}" rel="stylesheet">
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body data-assistant-page-type="{% block assistant_page_type %}home{% endblock %}" data-assistant-object-id="{% block assistant_object_id %}{% endblock %}" data-assistant-search-query="{% block assistant_search_query %}{% endblock %}">
   <nav class="navbar navbar-expand-lg navbar-dark research-nav" aria-label="主要導覽">
     <div class="container">
       <a class="navbar-brand fw-semibold" href="{% url 'public_site:home' %}">AI Research Knowledge</a>
@@ -35,14 +36,39 @@
 
   <main>{% block content %}{% endblock %}</main>
 
-  <button class="assistant-placeholder" type="button" disabled aria-label="AI 研究助理將於後續階段開放">
-    <span aria-hidden="true">AI</span><span class="d-none d-sm-inline">研究助理（即將推出）</span>
+  <button class="assistant-launcher" id="assistant-open-button" type="button" aria-label="開啟 AI 研究助理" aria-controls="assistant-drawer" aria-expanded="false">
+    <span aria-hidden="true">AI</span><span class="d-none d-sm-inline">研究助理</span>
   </button>
+
+  <section class="assistant-drawer" id="assistant-drawer" role="dialog" aria-modal="false" aria-label="AI 研究助理" aria-hidden="true" hidden>
+    <div class="assistant-drawer__header">
+      <div>
+        <p class="assistant-drawer__eyebrow">Research Navigator</p>
+        <h2>AI 研究助理</h2>
+      </div>
+      <div class="assistant-drawer__actions">
+        <button class="btn btn-sm btn-outline-secondary" id="assistant-end-button" type="button">結束對話</button>
+        <button class="assistant-icon-button" id="assistant-close-button" type="button" aria-label="關閉 AI 研究助理">X</button>
+      </div>
+    </div>
+    <div class="assistant-drawer__notice">關閉視窗只會暫時收合；按「結束對話」才會結束並重新開始。</div>
+    <div class="assistant-messages" id="assistant-messages" aria-live="polite"></div>
+    <div class="assistant-loading" id="assistant-loading" hidden>
+      <span></span><span></span><span></span>
+      <span class="visually-hidden">AI 研究助理正在整理平台資料</span>
+    </div>
+    <form class="assistant-form" id="assistant-form">
+      <label class="visually-hidden" for="assistant-input">詢問研究助理</label>
+      <textarea id="assistant-input" rows="2" maxlength="4000" placeholder="例如：我想研究 AI 金融，可以先看哪些老師與作品？"></textarea>
+      <button class="btn btn-primary" type="submit">送出</button>
+    </form>
+  </section>
 
   <footer class="border-top mt-5 py-4 text-secondary">
     <div class="container small">本平台的 AI 與語意檢索功能仍在分階段建置；公開內容僅來自已發布且允許公開的資料。</div>
   </footer>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="{% static 'public_site/assistant.js' %}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

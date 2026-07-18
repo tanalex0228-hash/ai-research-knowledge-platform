@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AIRequestLog, PromptVersion
+from .models import AIRequestLog, AssistantMessage, AssistantSession, PromptVersion
 
 
 @admin.register(PromptVersion)
@@ -42,3 +42,38 @@ class AIRequestLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+
+@admin.register(AssistantSession)
+class AssistantSessionAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "django_session_key", "status", "started_at", "ended_at")
+    list_filter = ("status", "started_at")
+    search_fields = ("id", "user__username", "django_session_key")
+    raw_id_fields = ("user",)
+    readonly_fields = tuple(field.name for field in AssistantSession._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return bool(request.user.is_staff)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AssistantMessage)
+class AssistantMessageAdmin(admin.ModelAdmin):
+    list_display = ("id", "session", "role", "created_at")
+    list_filter = ("role", "created_at")
+    search_fields = ("id", "session__id", "content")
+    raw_id_fields = ("session",)
+    readonly_fields = tuple(field.name for field in AssistantMessage._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

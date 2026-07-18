@@ -175,9 +175,26 @@ Versioned JSON API:
 - `GET /api/v1/professors`
 - `GET /api/v1/professors/{id}`
 - `POST /api/v1/search/semantic` — explicit `501` Phase 2 stub
+- `GET /api/v1/ai/assistant/session` — current active floating Research Navigator session
+- `POST /api/v1/ai/assistant/messages` — send a page-aware navigator message
+- `POST /api/v1/ai/assistant/end` — end the current navigator session
 - `POST /api/v1/ai/teacher-matching` — explicit `501` Phase 4 stub
 
 See `docs/api/openapi.yaml` for the current contract.
+
+## Floating AI Research Navigator
+
+Every public page includes a bottom-right Research Navigator button. Opening and
+closing the drawer changes only the browser UI; the active conversation remains
+available until the user presses `結束對話`. Messages are persisted in
+`AssistantSession` and `AssistantMessage`, isolated by authenticated user or by
+the anonymous Django browser session.
+
+The navigator is intentionally database-first. It collects the current page type
+and object ID from the browser, then re-queries visible research works,
+professors, fields, and methods on the server before constructing the prompt.
+It does not read PDFs, regenerate summaries, use vector search, or promote any
+AI output into approved metadata.
 
 ## Known Phase 1.5 limitations
 

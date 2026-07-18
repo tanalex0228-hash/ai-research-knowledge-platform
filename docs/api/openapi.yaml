@@ -156,6 +156,118 @@ paths:
         "501": {$ref: "#/components/responses/NotImplemented"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
+  /ai/assistant/session:
+    get:
+      operationId: getAssistantSession
+      summary: Read the current active floating Research Navigator session
+      description: >-
+        Returns the active persisted conversation for the authenticated user or
+        anonymous browser session. If no active session exists, session is null
+        and messages is empty. The endpoint does not expose other users'
+        conversations.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Current active navigator session and messages
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, request_id]
+                properties:
+                  data: {$ref: "#/components/schemas/AssistantSessionEnvelope"}
+                  request_id: {type: string}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /ai/assistant/messages:
+    post:
+      operationId: createAssistantMessage
+      summary: Send a page-aware Research Navigator message
+      description: >-
+        Creates or resumes the caller's active navigator session. The supplied
+        page_context is treated only as a hint; the backend re-checks object
+        visibility before adding metadata to the prompt. Closing the drawer does
+        not call this endpoint and does not end the session.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string, maxLength: 4000}
+                page_context:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: User message and assistant reply persisted
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, request_id]
+                properties:
+                  data:
+                    type: object
+                    required: [session, user_message, assistant_message, citations, page_context]
+                    properties:
+                      session: {$ref: "#/components/schemas/AssistantSession"}
+                      user_message: {$ref: "#/components/schemas/AssistantMessage"}
+                      assistant_message: {$ref: "#/components/schemas/AssistantMessage"}
+                      citations:
+                        type: array
+                        items: {$ref: "#/components/schemas/AssistantCitation"}
+                      page_context:
+                        type: object
+                        additionalProperties: true
+                  request_id: {type: string}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /ai/assistant/end:
+    post:
+      operationId: endAssistantSession
+      summary: End the current floating Research Navigator session
+      description: >-
+        Marks the caller's active session ended. Closing the UI with X is only a
+        client-side collapse and must not call this endpoint.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200":
+          description: Session end result
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, request_id]
+                properties:
+                  data:
+                    type: object
+                    required: [ended, session_id]
+                    properties:
+                      ended: {type: boolean}
+                      session_id:
+                        type: [string, "null"]
+                        format: uuid
+                  request_id: {type: string}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
 components:
   securitySchemes:
     sessionAuth:
@@ -202,6 +314,56 @@ components:
         language: {type: string}
         status: {type: string}
         visibility_scope: {$ref: "#/components/schemas/VisibilityScope"}
+    AssistantSessionEnvelope:
+      type: object
+      required: [session, messages]
+      properties:
+        session:
+          anyOf:
+            - {$ref: "#/components/schemas/AssistantSession"}
+            - type: "null"
+        messages:
+          type: array
+          items: {$ref: "#/components/schemas/AssistantMessage"}
+    AssistantSession:
+      type: object
+      required: [id, status, started_at, ended_at, last_context]
+      properties:
+        id: {type: string, format: uuid}
+        status:
+          type: string
+          enum: [active, ended]
+        started_at: {type: string, format: date-time}
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+        last_context:
+          type: object
+          additionalProperties: true
+    AssistantMessage:
+      type: object
+      required: [id, role, content, page_context, citations, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        role:
+          type: string
+          enum: [user, assistant]
+        content: {type: string}
+        page_context:
+          type: object
+          additionalProperties: true
+        citations:
+          type: array
+          items: {$ref: "#/components/schemas/AssistantCitation"}
+        created_at: {type: string, format: date-time}
+    AssistantCitation:
+      type: object
+      required: [id, type, title, description]
+      properties:
+        id: {type: string}
+        type: {type: string}
+        title: {type: string}
+        description: {type: string}
     Error:
       type: object
       required: [error_code, message, details, request_id]
