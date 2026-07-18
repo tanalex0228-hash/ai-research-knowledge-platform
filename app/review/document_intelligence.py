@@ -69,6 +69,7 @@ DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA: dict[str, Any] = {
         "advisors",
         "research_fields",
         "research_methods",
+        "research_topics",
         "keywords",
         "variables",
         "organizations",
@@ -85,6 +86,7 @@ DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA: dict[str, Any] = {
         "advisors": {"type": "array"},
         "research_fields": {"type": "array"},
         "research_methods": {"type": "array"},
+        "research_topics": {"type": "array"},
         "keywords": {"type": "array"},
         "variables": {"type": "array"},
         "organizations": {"type": "array"},
@@ -127,6 +129,34 @@ def whole_document_text(chunks) -> str:
     return "\n\n".join(
         chunk.text.replace("\x00", "") for chunk in chunks if chunk.text.strip()
     )
+
+
+def chunk_evidence(chunk, excerpt: str | None = None) -> dict[str, Any]:
+    text = normalize_text(excerpt or chunk.text[:500])
+    return {
+        "page_number": chunk.page_start,
+        "chunk_id": str(chunk.id),
+        "source_excerpt": text,
+    }
+
+
+def evidence_for_terms(chunks, terms: list[str], *, fallback: bool = True) -> list[dict[str, Any]]:
+    normalized_terms = [normalize_text(term) for term in terms if normalize_text(term)]
+    evidence: list[dict[str, Any]] = []
+    for chunk in chunks:
+        chunk_text = normalize_text(chunk.text)
+        for term in normalized_terms:
+            if term and term in chunk_text:
+                idx = chunk_text.find(term)
+                start = max(0, idx - 120)
+                end = min(len(chunk_text), idx + len(term) + 120)
+                evidence.append(chunk_evidence(chunk, chunk_text[start:end]))
+                break
+        if evidence:
+            break
+    if not evidence and fallback and chunks:
+        evidence.append(chunk_evidence(chunks[0]))
+    return evidence
 
 
 def first_match(pattern: str, text: str, *, flags: int = 0) -> str | None:
@@ -251,6 +281,405 @@ def match_taxonomy(model, names: list[str]) -> list[MatchedEntity]:
             )
         )
     return matches
+
+
+def item_name(value: Any) -> str | None:
+    if isinstance(value, str):
+        return normalize_text(value)
+    if isinstance(value, dict):
+        for key in ("full_name", "name", "display_name", "value", "canonical_name"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and normalize_text(candidate):
+                return normalize_text(candidate)
+    return None
+
+
+def item_role(value: Any) -> str:
+    if isinstance(value, dict):
+        return normalize_text(str(value.get("role") or ""))
+    return ""
+
+
+def scalar_value(value: Any) -> Any:
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
+def scalar_confidence(value: Any, default: float | None = None) -> float | None:
+    if isinstance(value, dict):
+        confidence = value.get("confidence")
+        if isinstance(confidence, int | float):
+            return max(0.0, min(1.0, float(confidence)))
+    return default
+
+
+def scalar_evidence(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict) and isinstance(value.get("evidence"), list):
+        return [item for item in value["evidence"] if isinstance(item, dict)]
+    return []
+
+
+def unique_names(values: list[Any], *, allowed_roles: set[str] | None = None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        role = item_role(value).casefold()
+        if allowed_roles is not None and role and role not in allowed_roles:
+            continue
+        name = item_name(value)
+        if not name:
+            continue
+        normalized = normalize_text(name).casefold()
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(name)
+    return result
+
+
+def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any]) -> dict[str, Any]:
+    """Reconcile provider JSON with local canonical matching and review contract."""
+
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    metadata_raw = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata_keys = [
+        "title",
+        "subtitle",
+        "language",
+        "research_type",
+        "publication_year",
+        "research_degree",
+        "department",
+        "school",
+        "university",
+        "academic_term",
+        "corresponding_author",
+        "research_domain",
+        "research_direction",
+        "research_question",
+        "research_motivation",
+        "research_objectives",
+        "research_contributions",
+        "research_limitations",
+        "future_research",
+    ]
+    metadata: dict[str, Any] = {}
+    metadata_evidence: dict[str, list[dict[str, Any]]] = {}
+    confidence: dict[str, float | None] = {}
+    for key in metadata_keys:
+        raw_value = metadata_raw.get(key)
+        value = scalar_value(raw_value)
+        metadata[key] = value if value not in ("", []) else None
+        confidence[key] = scalar_confidence(raw_value)
+        evidence = scalar_evidence(raw_value)
+        if not evidence and metadata[key] is not None:
+            evidence = evidence_for_terms(chunks, [str(metadata[key])])
+        metadata_evidence[key] = evidence
+    metadata["evidence"] = metadata_evidence
+
+    author_values = payload.get("authors") if isinstance(payload.get("authors"), list) else []
+    advisor_values = payload.get("advisors") if isinstance(payload.get("advisors"), list) else []
+    metadata_author_values = metadata_raw.get("student_authors", [])
+    metadata_advisor_values = metadata_raw.get("advisors", [])
+    metadata_coadvisor_values = metadata_raw.get("co_advisors", [])
+    if not isinstance(metadata_author_values, list):
+        metadata_author_values = [metadata_author_values]
+    if not isinstance(metadata_advisor_values, list):
+        metadata_advisor_values = [metadata_advisor_values]
+    if not isinstance(metadata_coadvisor_values, list):
+        metadata_coadvisor_values = [metadata_coadvisor_values]
+
+    student_roles = {"student", "author", "student author", "學生", "作者"}
+    author_names = unique_names(author_values + metadata_author_values, allowed_roles=student_roles)
+    advisor_names = unique_names(
+        advisor_values + metadata_advisor_values,
+        allowed_roles={"advisor", "primary advisor", "指導老師", "指導教授"},
+    )
+    coadvisor_names = unique_names(
+        advisor_values + metadata_coadvisor_values,
+        allowed_roles={"co-advisor", "co_advisor", "coadvisor", "共同指導", "共同指導老師", "共同指導教授"},
+    )
+    # Plain metadata arrays often carry only names. Include them when the
+    # provider did not provide role-bearing objects.
+    if not advisor_names:
+        advisor_names = unique_names(metadata_advisor_values)
+    if not coadvisor_names:
+        coadvisor_names = unique_names(metadata_coadvisor_values)
+
+    field_values = payload.get("research_fields") if isinstance(payload.get("research_fields"), list) else []
+    method_values = payload.get("research_methods") if isinstance(payload.get("research_methods"), list) else []
+    topic_values = metadata_raw.get("research_topics") or payload.get("research_topics") or []
+    if not isinstance(topic_values, list):
+        topic_values = [topic_values]
+    field_names = unique_names(field_values)
+    method_names = unique_names(method_values)
+    topic_names = unique_names(topic_values)
+
+    author_matches = match_students(author_names)
+    advisor_matches = match_professors(advisor_names)
+    coadvisor_matches = match_professors(coadvisor_names)
+    field_matches = match_taxonomy(ResearchField, field_names)
+    method_matches = match_taxonomy(ResearchMethod, method_names)
+
+    def entity_payload(match: MatchedEntity, *, role: str) -> dict[str, Any]:
+        evidence = evidence_for_terms(chunks, [match.name])
+        return {
+            "full_name": match.name,
+            "role": role,
+            **match.as_payload(),
+            "evidence": evidence,
+        }
+
+    keywords = payload.get("keywords") if isinstance(payload.get("keywords"), list) else []
+    keywords = [name for name in unique_names(keywords) if name][:10]
+    variables = payload.get("variables") if isinstance(payload.get("variables"), list) else []
+    organizations = payload.get("organizations") if isinstance(payload.get("organizations"), list) else []
+    companies = payload.get("companies") if isinstance(payload.get("companies"), list) else []
+    technologies = payload.get("technologies") if isinstance(payload.get("technologies"), list) else []
+
+    academic_raw = payload.get("academic_summary") if isinstance(payload.get("academic_summary"), dict) else {}
+    academic_summary: dict[str, Any] = {}
+    academic_evidence: dict[str, list[dict[str, Any]]] = {}
+    for key in ("summary", "background", "methodology", "findings", "limitations", "conclusion"):
+        raw_value = academic_raw.get(key)
+        value = scalar_value(raw_value)
+        academic_summary[key] = value if value not in ("", []) else None
+        academic_evidence[key] = scalar_evidence(raw_value) or (
+            evidence_for_terms(chunks, [str(value)], fallback=False) if value else []
+        )
+        confidence[f"academic_summary.{key}"] = scalar_confidence(raw_value)
+    summary_keywords = academic_raw.get("keywords", keywords)
+    academic_summary["keywords"] = (
+        [name for name in unique_names(summary_keywords) if name][:10]
+        if isinstance(summary_keywords, list)
+        else keywords
+    )
+    academic_summary["evidence"] = academic_evidence
+
+    knowledge_graph: list[dict[str, Any]] = []
+    for item in author_matches:
+        knowledge_graph.append(
+            {
+                "source_type": "Student",
+                "source": item.canonical_name or item.name,
+                "relationship": "AUTHORS",
+                "target_type": "ResearchWork",
+                "target": str(document.research_work_id),
+                "confidence": item.confidence,
+                "evidence": evidence_for_terms(chunks, [item.name]),
+            }
+        )
+    for item in advisor_matches:
+        knowledge_graph.append(
+            {
+                "source_type": "Professor",
+                "source": item.canonical_name or item.name,
+                "relationship": "ADVISES",
+                "target_type": "ResearchWork",
+                "target": str(document.research_work_id),
+                "advisor_role": "primary",
+                "confidence": item.confidence,
+                "evidence": evidence_for_terms(chunks, [item.name]),
+            }
+        )
+    for item in coadvisor_matches:
+        knowledge_graph.append(
+            {
+                "source_type": "Professor",
+                "source": item.canonical_name or item.name,
+                "relationship": "ADVISES",
+                "target_type": "ResearchWork",
+                "target": str(document.research_work_id),
+                "advisor_role": "co_advisor",
+                "confidence": item.confidence,
+                "evidence": evidence_for_terms(chunks, [item.name]),
+            }
+        )
+    for item in field_matches:
+        knowledge_graph.append(
+            {
+                "source_type": "ResearchWork",
+                "source": str(document.research_work_id),
+                "relationship": "BELONGS_TO",
+                "target_type": "ResearchField",
+                "target": item.canonical_name or item.name,
+                "confidence": item.confidence,
+                "evidence": evidence_for_terms(chunks, [item.name]),
+            }
+        )
+    for item in method_matches:
+        knowledge_graph.append(
+            {
+                "source_type": "ResearchWork",
+                "source": str(document.research_work_id),
+                "relationship": "USES_METHOD",
+                "target_type": "ResearchMethod",
+                "target": item.canonical_name or item.name,
+                "confidence": item.confidence,
+                "evidence": evidence_for_terms(chunks, [item.name]),
+            }
+        )
+    for keyword in keywords:
+        knowledge_graph.append(
+            {
+                "source_type": "ResearchWork",
+                "source": str(document.research_work_id),
+                "relationship": "HAS_KEYWORD",
+                "target_type": "Keyword",
+                "target": keyword,
+                "confidence": 0.75,
+                "evidence": evidence_for_terms(chunks, [keyword], fallback=False),
+            }
+        )
+
+    def student_action(item: MatchedEntity, position: int) -> dict[str, Any]:
+        action = "link_existing_student" if item.matched else "propose_new_student"
+        return {
+            "action": action,
+            "name": item.name,
+            "matched": item.matched,
+            "student_id": item.object_id,
+            "canonical_name": item.canonical_name,
+            "proposed_new_entity": item.proposed_new_entity,
+            "confidence": item.confidence,
+            "evidence": evidence_for_terms(chunks, [item.name]),
+            "relation": {
+                "action": "create_work_author",
+                "research_work_id": str(document.research_work_id),
+                "position": position,
+            },
+        }
+
+    def professor_action(item: MatchedEntity, role: str, position: int) -> dict[str, Any]:
+        action = "link_existing_professor" if item.matched else "propose_new_professor"
+        return {
+            "action": action,
+            "name": item.name,
+            "matched": item.matched,
+            "professor_id": item.object_id,
+            "canonical_name": item.canonical_name,
+            "proposed_new_entity": item.proposed_new_entity,
+            "confidence": item.confidence,
+            "evidence": evidence_for_terms(chunks, [item.name]),
+            "relation": {
+                "action": "create_work_advisor",
+                "research_work_id": str(document.research_work_id),
+                "role": role,
+                "position": position,
+            },
+        }
+
+    def taxonomy_action(item: MatchedEntity, *, kind: str) -> dict[str, Any]:
+        relation_action = "create_work_field" if kind == "research_field" else "create_work_method"
+        id_key = "research_field_id" if kind == "research_field" else "research_method_id"
+        action = f"link_existing_{kind}" if item.matched else f"propose_new_{kind}"
+        return {
+            "action": action,
+            "name": item.name,
+            "matched": item.matched,
+            id_key: item.object_id,
+            "canonical_name": item.canonical_name,
+            "proposed_new_entity": item.proposed_new_entity,
+            "confidence": item.confidence,
+            "evidence": evidence_for_terms(chunks, [item.name]),
+            "relation": {
+                "action": relation_action,
+                "research_work_id": str(document.research_work_id),
+            },
+        }
+
+    work_advisors = [
+        professor_action(item, "primary", pos)
+        for pos, item in enumerate(advisor_matches, start=1)
+    ] + [
+        professor_action(item, "co_advisor", pos)
+        for pos, item in enumerate(coadvisor_matches, start=len(advisor_matches) + 1)
+    ]
+    work_fields = [taxonomy_action(item, kind="research_field") for item in field_matches]
+    work_methods = [taxonomy_action(item, kind="research_method") for item in method_matches]
+
+    return {
+        "metadata": metadata,
+        "authors": [
+            entity_payload(item, role="Student") for item in author_matches
+        ],
+        "advisors": [
+            entity_payload(item, role="Advisor") for item in advisor_matches
+        ]
+        + [entity_payload(item, role="Co-advisor") for item in coadvisor_matches],
+        "research_fields": [
+            {**item.as_payload(), "evidence": evidence_for_terms(chunks, [item.name])}
+            for item in field_matches
+        ],
+        "research_methods": [
+            {**item.as_payload(), "evidence": evidence_for_terms(chunks, [item.name])}
+            for item in method_matches
+        ],
+        "research_topics": [
+            {"name": name, "confidence": 0.75, "evidence": evidence_for_terms(chunks, [name])}
+            for name in topic_names
+        ],
+        "keywords": keywords,
+        "variables": variables,
+        "organizations": organizations,
+        "companies": companies,
+        "technologies": technologies,
+        "knowledge_graph": knowledge_graph,
+        "academic_summary": academic_summary,
+        "confidence": confidence,
+        "database_actions": {
+            "students": [
+                student_action(item, pos)
+                for pos, item in enumerate(author_matches, start=1)
+            ],
+            "professors": work_advisors,
+            "research_fields": work_fields,
+            "research_methods": work_methods,
+            "work_authors": [
+                action["relation"] | {
+                    "student_id": action["student_id"],
+                    "student_name": action["name"],
+                    "matched": action["matched"],
+                    "confidence": action["confidence"],
+                    "evidence": action["evidence"],
+                }
+                for action in [
+                    student_action(item, pos)
+                    for pos, item in enumerate(author_matches, start=1)
+                ]
+            ],
+            "work_advisors": [
+                action["relation"] | {
+                    "professor_id": action["professor_id"],
+                    "professor_name": action["name"],
+                    "matched": action["matched"],
+                    "confidence": action["confidence"],
+                    "evidence": action["evidence"],
+                }
+                for action in work_advisors
+            ],
+            "work_fields": [
+                action["relation"] | {
+                    "research_field_id": action["research_field_id"],
+                    "research_field_name": action["name"],
+                    "matched": action["matched"],
+                    "confidence": action["confidence"],
+                    "evidence": action["evidence"],
+                }
+                for action in work_fields
+            ],
+            "work_methods": [
+                action["relation"] | {
+                    "research_method_id": action["research_method_id"],
+                    "research_method_name": action["name"],
+                    "matched": action["matched"],
+                    "confidence": action["confidence"],
+                    "evidence": action["evidence"],
+                }
+                for action in work_methods
+            ],
+        },
+    }
 
 
 def build_document_intelligence_payload(

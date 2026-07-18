@@ -312,7 +312,11 @@ def promote_review_item(item: ReviewItem, value: dict | str) -> None:
 
 
 
-def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtractionJob:
+def create_extraction_job_and_candidates(
+    document: SourceDocument,
+    *,
+    provider=None,
+) -> AIExtractionJob:
     """Create an extraction job and full-document metadata review candidates."""
 
     from ai.models import PromptVersion, AIRequestLog, AIRequestStatus, AIRequestPurpose
@@ -324,8 +328,14 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA,
         DOCUMENT_INTELLIGENCE_PROMPT,
         DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
-        build_document_intelligence_payload,
+        normalize_provider_payload,
         whole_document_text,
+    )
+    from review.document_intelligence_providers import (
+        DeterministicDocumentIntelligenceProvider,
+        DocumentIntelligenceProviderError,
+        audit_safe_input_payload,
+        get_document_intelligence_provider,
     )
 
     # 1. Get or create a PromptVersion for metadata extraction
@@ -340,15 +350,24 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         }
     )
 
+    chunks = list(document.chunks.all().order_by("chunk_index"))
+    selected_provider = provider or get_document_intelligence_provider()
+
     # 2. Create an AIRequestLog for auditable extraction
     ai_request = AIRequestLog.objects.create(
         purpose=AIRequestPurpose.EXTRACTION,
         prompt_version=prompt_version,
         requested_by=document.uploaded_by,
-        provider="deterministic",
-        model_name="regex-matcher",
-        input_payload={"document_id": str(document.pk)},
-        status=AIRequestStatus.PENDING,
+        provider=selected_provider.provider_name,
+        model_name=selected_provider.model_name,
+        input_payload=audit_safe_input_payload(
+            document=document,
+            chunks=chunks,
+            provider_name=selected_provider.provider_name,
+            model_name=selected_provider.model_name,
+        ),
+        status=AIRequestStatus.RUNNING,
+        started_at=timezone.now(),
         evidence_required=False,
     )
 
@@ -365,7 +384,6 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     )
 
     # 4. Scan Chunks for Metadata and Taxonomy matches
-    chunks = list(document.chunks.all().order_by("chunk_index"))
     first_chunk_text = chunks[0].text if chunks else ""
     all_chunks_text = whole_document_text(chunks)
     candidates_created = 0
@@ -619,22 +637,79 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                 candidates_created += 1
                 break
 
-    intelligence_payload = build_document_intelligence_payload(
-        document=document,
-        chunks=chunks,
-        extracted=extracted_summary,
-        advisor_names=advisors_found,
-        author_names=authors_found,
-        field_names=field_names_found,
-        method_names=method_names_found,
-    )
+    active_ai_request = ai_request
+    try:
+        intelligence_payload = selected_provider.extract(
+            document=document,
+            chunks=chunks,
+            extracted=extracted_summary,
+            advisor_names=advisors_found,
+            author_names=authors_found,
+            field_names=field_names_found,
+            method_names=method_names_found,
+        )
+        intelligence_payload = normalize_provider_payload(
+            document=document,
+            chunks=chunks,
+            raw_payload=intelligence_payload,
+        )
+        intelligence_model = selected_provider.model_name
+        intelligence_provider_name = selected_provider.provider_name
+        fallback_reason = getattr(selected_provider, "fallback_reason", "")
+        if fallback_reason:
+            intelligence_payload["provider_fallback_reason"] = fallback_reason
+    except DocumentIntelligenceProviderError as exc:
+        ai_request.mark_failed(code=exc.__class__.__name__, detail=str(exc))
+        fallback_provider = DeterministicDocumentIntelligenceProvider(
+            fallback_reason=exc.__class__.__name__
+        )
+        active_ai_request = AIRequestLog.objects.create(
+            purpose=AIRequestPurpose.EXTRACTION,
+            prompt_version=prompt_version,
+            requested_by=document.uploaded_by,
+            provider=fallback_provider.provider_name,
+            model_name=fallback_provider.model_name,
+            input_payload=audit_safe_input_payload(
+                document=document,
+                chunks=chunks,
+                provider_name=fallback_provider.provider_name,
+                model_name=fallback_provider.model_name,
+            )
+            | {"fallback_from": selected_provider.provider_name, "fallback_reason": str(exc)},
+            status=AIRequestStatus.RUNNING,
+            started_at=timezone.now(),
+            evidence_required=False,
+        )
+        job.ai_request = active_ai_request
+        job.save(update_fields=["ai_request", "updated_at"])
+        intelligence_payload = fallback_provider.extract(
+            document=document,
+            chunks=chunks,
+            extracted=extracted_summary,
+            advisor_names=advisors_found,
+            author_names=authors_found,
+            field_names=field_names_found,
+            method_names=method_names_found,
+        )
+        intelligence_payload = normalize_provider_payload(
+            document=document,
+            chunks=chunks,
+            raw_payload=intelligence_payload,
+        )
+        intelligence_payload["provider_fallback_reason"] = exc.__class__.__name__
+        intelligence_model = fallback_provider.model_name
+        intelligence_provider_name = fallback_provider.provider_name
+        fallback_reason = str(exc)
     add_candidate(
         "document_intelligence",
         intelligence_payload,
         ExtractionResultType.SUMMARY,
-        confidence=0.72,
-        model="deterministic-document-intelligence-v1",
-        evidence="Structured whole-document candidate assembled from all extracted chunks and database matches.",
+        confidence=0.82 if intelligence_provider_name != "deterministic" else 0.72,
+        model=intelligence_model,
+        evidence=(
+            "Structured whole-document candidate assembled from all page-aware chunks, "
+            "provider output, and normalized database matches."
+        ),
         source_text=all_chunks_text[:1500],
         extraction_reason=(
             "Uses all page-aware chunks to build a canonical metadata, knowledge graph, "
@@ -648,13 +723,17 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     job.completed_at = timezone.now()
     job.save(update_fields=["status", "completed_at"])
 
-    ai_request.output_payload = {
+    active_ai_request.output_payload = {
         "schema_version": job.schema_version,
         "candidates_created": candidates_created,
         "document_intelligence_candidate": True,
+        "provider": intelligence_provider_name,
+        "model": intelligence_model,
+        "fallback_reason": fallback_reason,
+        "document_intelligence": intelligence_payload,
     }
-    ai_request.status = AIRequestStatus.SUCCEEDED
-    ai_request.completed_at = timezone.now()
-    ai_request.save(update_fields=["output_payload", "status", "completed_at"])
+    active_ai_request.status = AIRequestStatus.SUCCEEDED
+    active_ai_request.completed_at = timezone.now()
+    active_ai_request.save(update_fields={"output_payload", "status", "completed_at"})
 
     return job

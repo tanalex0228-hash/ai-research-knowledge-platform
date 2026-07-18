@@ -183,6 +183,19 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "disabled")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
+DOCUMENT_INTELLIGENCE_PROVIDER = os.getenv(
+    "DOCUMENT_INTELLIGENCE_PROVIDER",
+    AI_PROVIDER if AI_PROVIDER in {"openai"} else "deterministic",
+)
+DOCUMENT_INTELLIGENCE_MODEL = os.getenv(
+    "DOCUMENT_INTELLIGENCE_MODEL",
+    LLM_MODEL or "gpt-4.1-mini",
+)
+DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS = int(
+    os.getenv("DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", "90")
+)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", AI_API_KEY)
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
