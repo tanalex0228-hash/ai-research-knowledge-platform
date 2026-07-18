@@ -425,6 +425,17 @@ class ReviewItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
+    confidence = models.FloatField(
+        validators=(MinValueValidator(0.0), MaxValueValidator(1.0)),
+        null=True,
+        blank=True,
+        default=1.0,
+    )
+    model = models.CharField(max_length=100, blank=True, default="deterministic-heuristic")
+    evidence = models.TextField(blank=True, default="")
+    source_text = models.TextField(blank=True, default="")
+    extraction_reason = models.TextField(blank=True, default="")
+
     objects = ReviewItemQuerySet.as_manager()
 
     class Meta:

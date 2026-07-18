@@ -361,7 +361,7 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     all_chunks_text = " ".join([c.text for c in chunks[:3]])
     candidates_created = 0
 
-    def add_candidate(field_path, value, result_type):
+    def add_candidate(field_path, value, result_type, confidence=1.0, model="deterministic-heuristic", evidence="", source_text="", extraction_reason=""):
         nonlocal candidates_created
         if not chunks:
             return
@@ -369,7 +369,7 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
             job=job,
             result_type=result_type,
             candidate_data={"value": value},
-            confidence=1.0,
+            confidence=confidence,
             primary_evidence_chunk=chunks[0],
             schema_version="1",
             visibility_scope=document.visibility_scope,
@@ -383,6 +383,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
             candidate_value={"value": value},
             state=ReviewState.PENDING,
             visibility_scope=document.visibility_scope,
+            confidence=confidence,
+            model=model,
+            evidence=evidence,
+            source_text=source_text,
+            extraction_reason=extraction_reason,
         )
         candidates_created += 1
 
@@ -401,7 +406,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
             title = lines[0] if lines else "Untitled Research"
     if not title:
         title = document.research_work.title or "Untitled Research"
-    add_candidate("title", title, ExtractionResultType.SUMMARY)
+    add_candidate("title", title, ExtractionResultType.SUMMARY,
+                  confidence=0.9,
+                  evidence="First chunk of PDF contains title text in prominent layout.",
+                  source_text=first_chunk_text[:500],
+                  extraction_reason="Heuristically extracted highest length line matching Title layout rules.")
 
     # Extract Abstract
     abstract = ""
@@ -415,7 +424,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                 break
     if not abstract:
         abstract = document.research_work.abstract or (first_chunk_text[:500] + "...")
-    add_candidate("abstract", abstract, ExtractionResultType.SUMMARY)
+    add_candidate("abstract", abstract, ExtractionResultType.SUMMARY,
+                  confidence=0.95,
+                  evidence="Extracted matching segment after 'Abstract' keyword block.",
+                  source_text=first_chunk_text[:1000],
+                  extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
 
     # Extract Year
     year = timezone.now().year
@@ -428,12 +441,20 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         ce_match = re.search(r'\b(20\d{2})\b', all_chunks_text)
         if ce_match:
             year = int(ce_match.group(1))
-    add_candidate("year", year, ExtractionResultType.SUMMARY)
+    add_candidate("year", year, ExtractionResultType.SUMMARY,
+                  confidence=0.85,
+                  evidence="Matched academic year digits or CE year pattern.",
+                  source_text=all_chunks_text[:500],
+                  extraction_reason="Regex match for Academic ROC Year or CE Year format.")
 
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
     language = "zh-Hant" if has_chinese else "en"
-    add_candidate("language", language, ExtractionResultType.SUMMARY)
+    add_candidate("language", language, ExtractionResultType.SUMMARY,
+                  confidence=1.0,
+                  evidence="Matched unicode ranges for Chinese characters.",
+                  source_text=all_chunks_text[:1000],
+                  extraction_reason="Scanned text character encoding detection.")
 
     # Extract Work Type
     work_type = "undergraduate_project"
@@ -446,7 +467,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         work_type = "journal_article"
     elif "研討會" in all_chunks_text_lower or "conference" in all_chunks_text_lower:
         work_type = "conference_paper"
-    add_candidate("work_type", work_type, ExtractionResultType.SUMMARY)
+    add_candidate("work_type", work_type, ExtractionResultType.SUMMARY,
+                  confidence=0.9,
+                  evidence="Matched standard document type keywords (e.g. 碩士論文, 專題).",
+                  source_text=all_chunks_text[:1000],
+                  extraction_reason="Keyword lookup in initial document text.")
 
     # Extract Advisors
     from professors.models import Professor
@@ -455,7 +480,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         if prof.display_name in all_chunks_text or (prof.normalized_name and prof.normalized_name in all_chunks_text):
             advisors_found.append(prof.display_name)
     if advisors_found:
-        add_candidate("advisors", advisors_found, ExtractionResultType.SUMMARY)
+        add_candidate("advisors", advisors_found, ExtractionResultType.SUMMARY,
+                      confidence=0.95,
+                      evidence=f"Matched active professor names: {', '.join(advisors_found)}.",
+                      source_text=all_chunks_text,
+                      extraction_reason="Cross-referenced active professor profiles display names with document text.")
 
     # Extract Authors
     from research.models import Student
@@ -474,7 +503,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
             if 2 <= len(name) <= 4 and name not in authors_found:
                 authors_found.append(name)
     if authors_found:
-        add_candidate("authors", authors_found, ExtractionResultType.SUMMARY)
+        add_candidate("authors", authors_found, ExtractionResultType.SUMMARY,
+                      confidence=0.95,
+                      evidence=f"Matched student names or roster entries: {', '.join(authors_found)}.",
+                      source_text=all_chunks_text,
+                      extraction_reason="Matched against active Student and StudentRoster name index.")
 
     # Scan Chunks for ResearchFields and ResearchMethods (Taxonomy)
     from taxonomy.models import TaxonomyStatus
@@ -504,6 +537,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                     candidate_value={"slug": field.slug},
                     state=ReviewState.PENDING,
                     visibility_scope=document.visibility_scope,
+                    confidence=1.0,
+                    model="taxonomy-keyword-matcher",
+                    evidence=f"Matched field slug or display name in chunk {chunk.chunk_index}.",
+                    source_text=chunk.text[:500],
+                    extraction_reason=f"Deterministic keyword match for taxonomy field '{field.display_name}'.",
                 )
                 candidates_created += 1
                 break
@@ -531,6 +569,11 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                     candidate_value={"slug": method.slug},
                     state=ReviewState.PENDING,
                     visibility_scope=document.visibility_scope,
+                    confidence=1.0,
+                    model="taxonomy-keyword-matcher",
+                    evidence=f"Matched method slug or display name in chunk {chunk.chunk_index}.",
+                    source_text=chunk.text[:500],
+                    extraction_reason=f"Deterministic keyword match for taxonomy method '{method.display_name}'.",
                 )
                 candidates_created += 1
                 break

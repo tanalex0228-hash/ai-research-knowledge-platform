@@ -356,3 +356,43 @@ class ReviewWorkflowTests(TestCase):
             model_admin.actions,
             ("approve_selected", "reject_selected", "archive_selected"),
         )
+
+    def test_review_item_explainability_fields(self):
+        from review.services import create_extraction_job_and_candidates
+        # Set up a source document with a dummy file containing text
+        work = ResearchWork.objects.create(
+            work_type=ResearchWorkType.UNDERGRADUATE_PROJECT,
+            title="Explainability Test Work",
+            year=2025,
+            status=ResearchWorkStatus.UPLOADED,
+            visibility_scope=VisibilityScope.PUBLIC,
+        )
+        doc = SourceDocument.objects.create(
+            research_work=work,
+            file=SimpleUploadedFile(
+                "explainability.pdf",
+                b"%PDF-1.4\nExplainability Test Content\n%%EOF",
+                content_type="application/pdf",
+            ),
+            visibility_scope=VisibilityScope.PUBLIC,
+        )
+        # Create a document chunk to simulate parsing
+        chunk = DocumentChunk.objects.create(
+            source_document=doc,
+            chunk_index=0,
+            text="Explainability Test Content - Abstract: This is about research fields.",
+            token_count=10,
+            visibility_scope=VisibilityScope.PUBLIC,
+        )
+        # Call candidate creation
+        job = create_extraction_job_and_candidates(doc)
+        
+        # Verify that review items have confidence, model, evidence, source_text, and extraction_reason populated
+        items = ReviewItem.objects.filter(target_id=work.id)
+        self.assertTrue(items.exists())
+        for item in items:
+            self.assertIsNotNone(item.confidence)
+            self.assertIsNotNone(item.model)
+            self.assertIsNotNone(item.evidence)
+            self.assertIsNotNone(item.source_text)
+            self.assertIsNotNone(item.extraction_reason)
