@@ -105,10 +105,19 @@ class PDFExtractionTaskTests(TestCase):
 
         # Check ReviewItems
         review_items = list(ReviewItem.objects.filter(target_id=self.work.id))
-        self.assertEqual(len(review_items), 7)
+        self.assertEqual(len(review_items), 8)
         field_review = next(item for item in review_items if "fields" in item.field_path)
         self.assertEqual(field_review.candidate_value, {"slug": "esg"})
         self.assertEqual(field_review.state, ReviewState.PENDING)
+        intelligence_review = next(
+            item for item in review_items if item.field_path == "document_intelligence"
+        )
+        self.assertIn("database_actions", intelligence_review.candidate_value)
+        self.assertTrue(
+            intelligence_review.candidate_value["database_actions"]["research_fields"][0][
+                "matched"
+            ]
+        )
 
     def test_scanned_pdf_enters_ocr_fallback(self):
         # Empty text PDF

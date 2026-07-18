@@ -396,3 +396,15 @@ class ReviewWorkflowTests(TestCase):
             self.assertIsNotNone(item.evidence)
             self.assertIsNotNone(item.source_text)
             self.assertIsNotNone(item.extraction_reason)
+
+        job.refresh_from_db()
+        self.assertEqual(job.schema_version, "document_intelligence.v1")
+        self.assertEqual(job.prompt_version.version, 2)
+        intelligence_item = items.get(field_path="document_intelligence")
+        self.assertIn("metadata", intelligence_item.candidate_value)
+        self.assertIn("knowledge_graph", intelligence_item.candidate_value)
+        self.assertIn("academic_summary", intelligence_item.candidate_value)
+        self.assertIn("database_actions", intelligence_item.candidate_value)
+        self.assertIsNone(
+            intelligence_item.candidate_value["metadata"]["publication_year"]
+        )

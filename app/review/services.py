@@ -313,22 +313,30 @@ def promote_review_item(item: ReviewItem, value: dict | str) -> None:
 
 
 def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtractionJob:
-    """Create an AI extraction job and scan document chunks for taxonomy matches."""
+    """Create an extraction job and full-document metadata review candidates."""
 
     from ai.models import PromptVersion, AIRequestLog, AIRequestStatus, AIRequestPurpose
     from review.models import AIExtractionJob, ExtractionJobStatus, AIExtractionResult, ExtractionResultType, ExtractionResultStatus, ReviewItem, ReviewState
     from taxonomy.models import ResearchField, ResearchMethod
     from django.utils import timezone
     import re
+    from review.document_intelligence import (
+        DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA,
+        DOCUMENT_INTELLIGENCE_PROMPT,
+        DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
+        build_document_intelligence_payload,
+        whole_document_text,
+    )
 
     # 1. Get or create a PromptVersion for metadata extraction
     prompt_version, _ = PromptVersion.objects.get_or_create(
         key="metadata-extraction",
-        version=1,
+        version=2,
         defaults={
-            "template": "Extract research fields and methods.",
+            "template": DOCUMENT_INTELLIGENCE_PROMPT,
             "status": "active",
-            "output_schema": {"type": "object"},
+            "output_schema": DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA,
+            "schema_version": DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
         }
     )
 
@@ -350,6 +358,7 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         prompt_version=prompt_version,
         ai_request=ai_request,
         requested_by=document.uploaded_by,
+        schema_version=DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
         visibility_scope=document.visibility_scope,
         status=ExtractionJobStatus.RUNNING,
         started_at=timezone.now(),
@@ -358,20 +367,21 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     # 4. Scan Chunks for Metadata and Taxonomy matches
     chunks = list(document.chunks.all().order_by("chunk_index"))
     first_chunk_text = chunks[0].text if chunks else ""
-    all_chunks_text = " ".join([c.text for c in chunks[:3]])
+    all_chunks_text = whole_document_text(chunks)
     candidates_created = 0
 
-    def add_candidate(field_path, value, result_type, confidence=1.0, model="deterministic-heuristic", evidence="", source_text="", extraction_reason=""):
+    def add_candidate(field_path, value, result_type, confidence=1.0, model="deterministic-heuristic", evidence="", source_text="", extraction_reason="", candidate_data=None):
         nonlocal candidates_created
         if not chunks:
             return
+        payload = candidate_data if candidate_data is not None else {"value": value}
         result = AIExtractionResult.objects.create(
             job=job,
             result_type=result_type,
-            candidate_data={"value": value},
+            candidate_data=payload,
             confidence=confidence,
             primary_evidence_chunk=chunks[0],
-            schema_version="1",
+            schema_version=job.schema_version,
             visibility_scope=document.visibility_scope,
             status=ExtractionResultStatus.CANDIDATE,
         )
@@ -380,7 +390,7 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
             target_type=ReviewTargetType.RESEARCH_WORK,
             target_id=document.research_work_id,
             field_path=field_path,
-            candidate_value={"value": value},
+            candidate_value=payload,
             state=ReviewState.PENDING,
             visibility_scope=document.visibility_scope,
             confidence=confidence,
@@ -391,8 +401,15 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         )
         candidates_created += 1
 
+    extracted_summary: dict[str, object] = {}
+    advisors_found: list[str] = []
+    authors_found: list[str] = []
+    field_names_found: list[str] = []
+    method_names_found: list[str] = []
+
     # Extract Title
     title = ""
+    title_from_document = False
     if first_chunk_text:
         lines = [line.strip() for line in first_chunk_text.split('\n') if line.strip()]
         stop_keywords = ["輔仁", "大學", "學系", "專題", "學年度", "指導老師", "學生", "研究計劃", "報告", "目錄", "abstract", "摘要"]
@@ -402,10 +419,14 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                 candidate_lines.append(line)
         if candidate_lines:
             title = max(candidate_lines[:3], key=len)
+            title_from_document = True
         else:
             title = lines[0] if lines else "Untitled Research"
+            title_from_document = bool(lines)
     if not title:
         title = document.research_work.title or "Untitled Research"
+    extracted_summary["title"] = title if title_from_document else None
+    extracted_summary["title_confidence"] = 0.9 if title_from_document else None
     add_candidate("title", title, ExtractionResultType.SUMMARY,
                   confidence=0.9,
                   evidence="First chunk of PDF contains title text in prominent layout.",
@@ -414,16 +435,20 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
 
     # Extract Abstract
     abstract = ""
-    for chunk in chunks[:3]:
+    abstract_from_document = False
+    for chunk in chunks:
         match = re.search(r'(摘要|Abstract|ABSTRACT)[:：\s\n]+(.*)', chunk.text, re.DOTALL | re.IGNORECASE)
         if match:
             abstract_text = match.group(2).strip()
             stop_match = re.split(r'(關鍵字|Keywords|Keywords:|1\.\s+(前言|緒論|Introduction)|目錄)', abstract_text, maxsplit=1, flags=re.IGNORECASE)
             abstract = stop_match[0].strip()
             if abstract:
+                abstract_from_document = True
                 break
     if not abstract:
         abstract = document.research_work.abstract or (first_chunk_text[:500] + "...")
+    extracted_summary["abstract"] = abstract if abstract_from_document else None
+    extracted_summary["abstract_confidence"] = 0.95 if abstract_from_document else None
     add_candidate("abstract", abstract, ExtractionResultType.SUMMARY,
                   confidence=0.95,
                   evidence="Extracted matching segment after 'Abstract' keyword block.",
@@ -432,15 +457,20 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
 
     # Extract Year
     year = timezone.now().year
+    year_from_document = False
     roc_match = re.search(r'(\d{2,3})\s*(學年度|年)', all_chunks_text)
     if roc_match:
         y = int(roc_match.group(1))
         if y < 1900:
             year = y + 1911
+            year_from_document = True
     else:
         ce_match = re.search(r'\b(20\d{2})\b', all_chunks_text)
         if ce_match:
             year = int(ce_match.group(1))
+            year_from_document = True
+    extracted_summary["year"] = year if year_from_document else None
+    extracted_summary["year_confidence"] = 0.85 if year_from_document else None
     add_candidate("year", year, ExtractionResultType.SUMMARY,
                   confidence=0.85,
                   evidence="Matched academic year digits or CE year pattern.",
@@ -450,6 +480,8 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
     language = "zh-Hant" if has_chinese else "en"
+    extracted_summary["language"] = language
+    extracted_summary["language_confidence"] = 1.0
     add_candidate("language", language, ExtractionResultType.SUMMARY,
                   confidence=1.0,
                   evidence="Matched unicode ranges for Chinese characters.",
@@ -458,15 +490,22 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
 
     # Extract Work Type
     work_type = "undergraduate_project"
+    work_type_from_document = False
     all_chunks_text_lower = all_chunks_text.lower()
     if "專題成果" in all_chunks_text_lower or "專題報告" in all_chunks_text_lower or "大學部" in all_chunks_text_lower:
         work_type = "undergraduate_project"
+        work_type_from_document = True
     elif "碩士論文" in all_chunks_text_lower or "thesis" in all_chunks_text_lower:
         work_type = "master_thesis"
+        work_type_from_document = True
     elif "期刊" in all_chunks_text_lower or "journal" in all_chunks_text_lower:
         work_type = "journal_article"
+        work_type_from_document = True
     elif "研討會" in all_chunks_text_lower or "conference" in all_chunks_text_lower:
         work_type = "conference_paper"
+        work_type_from_document = True
+    extracted_summary["work_type"] = work_type if work_type_from_document else None
+    extracted_summary["work_type_confidence"] = 0.9 if work_type_from_document else None
     add_candidate("work_type", work_type, ExtractionResultType.SUMMARY,
                   confidence=0.9,
                   evidence="Matched standard document type keywords (e.g. 碩士論文, 專題).",
@@ -519,13 +558,14 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         for chunk in chunks:
             chunk_text_lower = chunk.text.lower()
             if any(name in chunk_text_lower for name in names_to_check):
+                field_names_found.append(field.display_name)
                 result = AIExtractionResult.objects.create(
                     job=job,
                     result_type=ExtractionResultType.FIELD,
                     candidate_data={"slug": field.slug},
                     confidence=1.0,
                     primary_evidence_chunk=chunk,
-                    schema_version="1",
+                    schema_version=job.schema_version,
                     visibility_scope=document.visibility_scope,
                     status=ExtractionResultStatus.CANDIDATE,
                 )
@@ -551,13 +591,14 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         for chunk in chunks:
             chunk_text_lower = chunk.text.lower()
             if any(name in chunk_text_lower for name in names_to_check):
+                method_names_found.append(method.display_name)
                 result = AIExtractionResult.objects.create(
                     job=job,
                     result_type=ExtractionResultType.METHOD,
                     candidate_data={"slug": method.slug},
                     confidence=1.0,
                     primary_evidence_chunk=chunk,
-                    schema_version="1",
+                    schema_version=job.schema_version,
                     visibility_scope=document.visibility_scope,
                     status=ExtractionResultStatus.CANDIDATE,
                 )
@@ -578,12 +619,40 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
                 candidates_created += 1
                 break
 
+    intelligence_payload = build_document_intelligence_payload(
+        document=document,
+        chunks=chunks,
+        extracted=extracted_summary,
+        advisor_names=advisors_found,
+        author_names=authors_found,
+        field_names=field_names_found,
+        method_names=method_names_found,
+    )
+    add_candidate(
+        "document_intelligence",
+        intelligence_payload,
+        ExtractionResultType.SUMMARY,
+        confidence=0.72,
+        model="deterministic-document-intelligence-v1",
+        evidence="Structured whole-document candidate assembled from all extracted chunks and database matches.",
+        source_text=all_chunks_text[:1500],
+        extraction_reason=(
+            "Uses all page-aware chunks to build a canonical metadata, knowledge graph, "
+            "academic summary, and database action candidate for review."
+        ),
+        candidate_data=intelligence_payload,
+    )
+
     # 5. Complete Job & Request Log
     job.status = ExtractionJobStatus.SUCCEEDED
     job.completed_at = timezone.now()
     job.save(update_fields=["status", "completed_at"])
 
-    ai_request.output_payload = {"candidates_created": candidates_created}
+    ai_request.output_payload = {
+        "schema_version": job.schema_version,
+        "candidates_created": candidates_created,
+        "document_intelligence_candidate": True,
+    }
     ai_request.status = AIRequestStatus.SUCCEEDED
     ai_request.completed_at = timezone.now()
     ai_request.save(update_fields=["output_payload", "status", "completed_at"])
