@@ -204,6 +204,22 @@ AI output into approved metadata.
 - Existing source documents cannot be promoted between visibility scopes in Phase 1.5; a reviewed document-release workflow belongs to the next governance increment.
 - PDF malware scanning, OCR, parsing, embeddings, semantic search, RAG, AI matching, and news processing remain out of scope.
 
+## High-risk hard delete permissions
+
+Normal `delete_*` permissions do not bypass protected governance records such as
+lifecycle transitions, review decisions, and derived document evidence. When a
+showcase or administrator environment needs direct deletion, assign the explicit
+custom permissions from the Django user permission menu:
+
+- `accounts | user | Can hard delete users referenced by governance audit records`
+- `professors | professor | Can hard delete professors referenced by governed research records`
+- `research | research work | Can hard delete research works and protected governance records`
+- `documents | source document | Can hard delete source documents and protected derived records`
+
+These permissions are intentionally separate from ordinary delete permissions.
+They are meant for controlled cleanup only; routine production removal should
+prefer archive/deactivate workflows.
+
 ## Three-tier production baseline
 
 - `fin-web`: public Nginx/TLS ingress and collected static assets

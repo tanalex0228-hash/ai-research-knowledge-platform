@@ -153,6 +153,12 @@ class ResearchWork(models.Model):
 
     class Meta:
         ordering = ("-year", "title", "id")
+        permissions = (
+            (
+                "hard_delete_researchwork",
+                "Can hard delete research works and protected governance records",
+            ),
+        )
         constraints = [
             models.UniqueConstraint(
                 fields=("normalized_title", "year", "work_type"),

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import router, transaction
 
@@ -9,6 +10,7 @@ from accounts.permissions import (
 )
 from accounts.services import record_audit_event
 from public_site.request_ids import request_id_for
+from research.hard_delete import hard_delete_source_documents
 from research.models import ResearchWork
 
 from .choices import VisibilityScope
@@ -50,6 +52,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         "checksum",
     )
     raw_id_fields = ("research_work", "uploaded_by")
+    actions = ("hard_delete_selected_source_documents",)
     readonly_fields = (
         "id",
         "stored_file_reference",
@@ -136,6 +139,37 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return is_platform_admin(request.user)
+
+    def _can_hard_delete(self, request) -> bool:
+        return is_platform_admin(request.user) and request.user.has_perm(
+            "documents.hard_delete_sourcedocument"
+        )
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if not self._can_hard_delete(request):
+            actions.pop("hard_delete_selected_source_documents", None)
+        return actions
+
+    def delete_model(self, request, obj):
+        if self._can_hard_delete(request):
+            hard_delete_source_documents([obj])
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        if not self._can_hard_delete(request):
+            return super().delete_queryset(request, queryset)
+        deleted = hard_delete_source_documents(queryset)
+        self.message_user(
+            request,
+            f"Hard-deleted {deleted} source document(s).",
+            level=messages.WARNING,
+        )
+
+    @admin.action(description="Hard delete selected source documents and derived records")
+    def hard_delete_selected_source_documents(self, request, queryset):
+        self.delete_queryset(request, queryset)
 
     @staticmethod
     def _teacher_advises_document(user, obj) -> bool:
@@ -328,4 +362,3 @@ class SourceDocumentInline(admin.TabularInline):
 
     def has_delete_permission(self, request, obj=None):
         return is_platform_admin(request.user)
-

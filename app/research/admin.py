@@ -20,6 +20,7 @@ from .models import (
     WorkMethod,
 )
 from documents.admin import SourceDocumentInline
+from .hard_delete import hard_delete_research_work
 from .services import transition_research_work
 
 
@@ -144,6 +145,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         "restore_archived",
         "approve_all_ai_candidates_and_publish",
         "rerun_extraction_pipeline",
+        "hard_delete_selected_research_works",
     )
 
     def get_queryset(self, request):
@@ -169,6 +171,11 @@ class ResearchWorkAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return is_platform_admin(request.user)
 
+    def _can_hard_delete(self, request) -> bool:
+        return is_platform_admin(request.user) and request.user.has_perm(
+            "research.hard_delete_researchwork"
+        )
+
     def get_readonly_fields(self, request, obj=None):
         fields = list(super().get_readonly_fields(request, obj))
         # Admin-created works always begin at the model default (draft). Trusted
@@ -183,7 +190,28 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         if not is_platform_admin(request.user):
             for action_name in self.actions:
                 actions.pop(action_name, None)
+        if not self._can_hard_delete(request):
+            actions.pop("hard_delete_selected_research_works", None)
         return actions
+
+    def delete_model(self, request, obj):
+        if self._can_hard_delete(request):
+            hard_delete_research_work(obj)
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        if not self._can_hard_delete(request):
+            return super().delete_queryset(request, queryset)
+        deleted = 0
+        for work in queryset:
+            hard_delete_research_work(work)
+            deleted += 1
+        self.message_user(
+            request,
+            f"Hard-deleted {deleted} research work(s).",
+            level=messages.WARNING,
+        )
 
     def save_model(self, request, obj, form, change):
         if change:
@@ -323,6 +351,10 @@ class ResearchWorkAdmin(admin.ModelAdmin):
             f"Queued re-extraction for {queued} document(s).",
             level=messages.SUCCESS if queued else messages.WARNING,
         )
+
+    @admin.action(description="Hard delete selected research works and protected records")
+    def hard_delete_selected_research_works(self, request, queryset):
+        self.delete_queryset(request, queryset)
 
     @admin.display(description="Status")
     def status_badge(self, obj):

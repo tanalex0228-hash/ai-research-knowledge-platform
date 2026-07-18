@@ -39,6 +39,12 @@ class User(AbstractUser):
     objects = UserManager()
 
     class Meta:
+        permissions = (
+            (
+                "hard_delete_user",
+                "Can hard delete users referenced by governance audit records",
+            ),
+        )
         constraints = [
             models.UniqueConstraint(
                 Lower("email"),

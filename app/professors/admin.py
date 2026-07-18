@@ -1,6 +1,8 @@
 from django.contrib import admin
+from django.contrib import messages
 
 from accounts.permissions import is_platform_admin
+from research.hard_delete import hard_delete_professor
 
 from .models import Professor, ProfessorAlias
 from .services import linked_professor_for_teacher
@@ -47,6 +49,7 @@ class ProfessorAdmin(admin.ModelAdmin):
     search_fields = ("display_name", "normalized_name", "email", "aliases__alias")
     autocomplete_fields = ("user",)
     readonly_fields = ("id", "normalized_name", "created_at", "updated_at")
+    actions = ("hard_delete_selected_professors",)
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
@@ -71,6 +74,40 @@ class ProfessorAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return is_platform_admin(request.user)
+
+    def _can_hard_delete(self, request) -> bool:
+        return is_platform_admin(request.user) and request.user.has_perm(
+            "professors.hard_delete_professor"
+        )
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if not self._can_hard_delete(request):
+            actions.pop("hard_delete_selected_professors", None)
+        return actions
+
+    def delete_model(self, request, obj):
+        if self._can_hard_delete(request):
+            hard_delete_professor(obj)
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        if not self._can_hard_delete(request):
+            return super().delete_queryset(request, queryset)
+        deleted = 0
+        for professor in queryset:
+            hard_delete_professor(professor)
+            deleted += 1
+        self.message_user(
+            request,
+            f"Hard-deleted {deleted} professor profile(s).",
+            level=messages.WARNING,
+        )
+
+    @admin.action(description="Hard delete selected professors and protected references")
+    def hard_delete_selected_professors(self, request, queryset):
+        self.delete_queryset(request, queryset)
 
     def get_readonly_fields(self, request, obj=None):
         fields = list(super().get_readonly_fields(request, obj))

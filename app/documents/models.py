@@ -123,6 +123,12 @@ class SourceDocument(models.Model):
 
     class Meta:
         ordering = ("-uploaded_at", "id")
+        permissions = (
+            (
+                "hard_delete_sourcedocument",
+                "Can hard delete source documents and protected derived records",
+            ),
+        )
         constraints = [
             models.CheckConstraint(
                 condition=Q(file_size__isnull=True) | Q(file_size__gt=0),

@@ -1,5 +1,9 @@
 from django.contrib import admin
+from django.contrib import messages
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+
+from accounts.permissions import is_platform_admin
+from research.hard_delete import hard_delete_user
 
 from .models import AuditLog, Role, User, UserRole
 
@@ -24,6 +28,41 @@ class UserAdmin(DjangoUserAdmin):
     list_filter = ("is_active", "is_staff", "is_superuser")
     search_fields = ("username", "email", "first_name", "last_name")
     readonly_fields = ("id", "last_login", "date_joined")
+    actions = ("hard_delete_selected_users",)
+
+    def _can_hard_delete(self, request) -> bool:
+        return is_platform_admin(request.user) and request.user.has_perm(
+            "accounts.hard_delete_user"
+        )
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if not self._can_hard_delete(request):
+            actions.pop("hard_delete_selected_users", None)
+        return actions
+
+    def delete_model(self, request, obj):
+        if self._can_hard_delete(request):
+            hard_delete_user(obj)
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        if not self._can_hard_delete(request):
+            return super().delete_queryset(request, queryset)
+        deleted = 0
+        for user in queryset:
+            hard_delete_user(user)
+            deleted += 1
+        self.message_user(
+            request,
+            f"Hard-deleted {deleted} user account(s).",
+            level=messages.WARNING,
+        )
+
+    @admin.action(description="Hard delete selected users and protected references")
+    def hard_delete_selected_users(self, request, queryset):
+        self.delete_queryset(request, queryset)
 
 
 @admin.register(Role)

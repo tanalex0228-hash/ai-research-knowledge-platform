@@ -67,6 +67,12 @@ class Professor(models.Model):
 
     class Meta:
         ordering = ("display_name", "id")
+        permissions = (
+            (
+                "hard_delete_professor",
+                "Can hard delete professors referenced by governed research records",
+            ),
+        )
         constraints = [
             models.CheckConstraint(
                 condition=~models.Q(display_name=""),
