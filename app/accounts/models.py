@@ -39,10 +39,12 @@ class User(AbstractUser):
     objects = UserManager()
 
     class Meta:
+        verbose_name = "使用者"
+        verbose_name_plural = "使用者"
         permissions = (
             (
                 "hard_delete_user",
-                "Can hard delete users referenced by governance audit records",
+                "可直接刪除受治理紀錄保護的使用者",
             ),
         )
         constraints = [
@@ -94,6 +96,8 @@ class Role(models.Model):
     objects = RoleQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "角色"
+        verbose_name_plural = "角色"
         ordering = ("display_name", "slug")
         constraints = [
             models.CheckConstraint(
@@ -130,6 +134,8 @@ class UserRole(models.Model):
     assigned_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "使用者角色"
+        verbose_name_plural = "使用者角色"
         ordering = ("user_id", "role_id")
         constraints = [
             models.UniqueConstraint(
@@ -180,6 +186,8 @@ class AuditLog(models.Model):
     objects = AuditLogQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "稽核紀錄"
+        verbose_name_plural = "稽核紀錄"
         ordering = ("-created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -201,18 +209,18 @@ class AuditLog(models.Model):
 
 
 class EnrollmentStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    LEAVE = "leave", "Leave"
-    GRADUATED = "graduated", "Graduated"
-    WITHDRAWN = "withdrawn", "Withdrawn"
-    SUSPENDED = "suspended", "Suspended"
+    ACTIVE = "active", "在學"
+    LEAVE = "leave", "休學"
+    GRADUATED = "graduated", "畢業"
+    WITHDRAWN = "withdrawn", "退學"
+    SUSPENDED = "suspended", "停學"
 
 
 class Program(models.TextChoices):
-    UNDERGRADUATE = "undergraduate", "Undergraduate"
-    MASTER = "master", "Master"
-    PHD = "phd", "PhD"
-    OTHER = "other", "Other"
+    UNDERGRADUATE = "undergraduate", "大學部"
+    MASTER = "master", "碩士班"
+    PHD = "phd", "博士班"
+    OTHER = "other", "其他"
 
 
 class StudentRoster(models.Model):
@@ -246,6 +254,8 @@ class StudentRoster(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "學生名冊"
+        verbose_name_plural = "學生名冊"
         ordering = ("student_id", "-effective_start")
         constraints = [
             models.UniqueConstraint(
@@ -304,6 +314,10 @@ class UserProfile(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        verbose_name = "使用者個人資料"
+        verbose_name_plural = "使用者個人資料"
+
     def __str__(self) -> str:
         return self.display_name or self.user.get_username()
 
@@ -330,6 +344,8 @@ class StudentRegistrationOTP(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "學生註冊 OTP"
+        verbose_name_plural = "學生註冊 OTP"
         ordering = ("-created_at", "id")
 
     def __str__(self) -> str:

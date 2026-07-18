@@ -33,8 +33,8 @@ def clean_aliases(value) -> list[str]:
 
 
 class TaxonomyStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    ARCHIVED = "archived", "Archived"
+    ACTIVE = "active", "啟用"
+    ARCHIVED = "archived", "封存"
 
 
 class TaxonomyQuerySet(models.QuerySet):
@@ -119,21 +119,21 @@ class ResearchField(TaxonomyBase):
     """A governed subject area such as AI finance or macroeconomics."""
 
     class Meta(TaxonomyBase.Meta):
-        verbose_name = "research field"
-        verbose_name_plural = "research fields"
+        verbose_name = "研究領域"
+        verbose_name_plural = "研究領域"
 
 
 class ResearchMethod(TaxonomyBase):
     """A governed research method such as VAR, survey, or LSTM."""
 
     class Meta(TaxonomyBase.Meta):
-        verbose_name = "research method"
-        verbose_name_plural = "research methods"
+        verbose_name = "研究方法"
+        verbose_name_plural = "研究方法"
 
 
 class AITag(TaxonomyBase):
     """A lower-governance approved tag; raw AI candidates live elsewhere."""
 
     class Meta(TaxonomyBase.Meta):
-        verbose_name = "AI tag"
-        verbose_name_plural = "AI tags"
+        verbose_name = "AI 標籤"
+        verbose_name_plural = "AI 標籤"

@@ -10,26 +10,26 @@ from django.utils import timezone
 
 
 class PromptStatus(models.TextChoices):
-    DRAFT = "draft", "Draft"
-    ACTIVE = "active", "Active"
-    RETIRED = "retired", "Retired"
+    DRAFT = "draft", "草稿"
+    ACTIVE = "active", "啟用"
+    RETIRED = "retired", "停用"
 
 
 class AIRequestPurpose(models.TextChoices):
-    EXTRACTION = "extraction", "Metadata extraction"
-    ASSISTANT = "assistant", "Research assistant"
-    RESEARCH_NAVIGATION = "research_navigation", "Research navigation"
-    TEACHER_MATCHING = "teacher_matching", "Teacher matching"
-    CHART_EXPLANATION = "chart_explanation", "Chart explanation"
+    EXTRACTION = "extraction", "Metadata 擷取"
+    ASSISTANT = "assistant", "研究助理"
+    RESEARCH_NAVIGATION = "research_navigation", "研究導航"
+    TEACHER_MATCHING = "teacher_matching", "教師推薦"
+    CHART_EXPLANATION = "chart_explanation", "圖表解釋"
 
 
 class AIRequestStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    RUNNING = "running", "Running"
-    SUCCEEDED = "succeeded", "Succeeded"
-    FAILED = "failed", "Failed"
-    BLOCKED = "blocked", "Blocked by policy"
-    NOT_IMPLEMENTED = "not_implemented", "Not implemented"
+    PENDING = "pending", "等待中"
+    RUNNING = "running", "執行中"
+    SUCCEEDED = "succeeded", "成功"
+    FAILED = "failed", "失敗"
+    BLOCKED = "blocked", "政策阻擋"
+    NOT_IMPLEMENTED = "not_implemented", "尚未實作"
 
 
 TERMINAL_AI_STATUSES = {
@@ -67,6 +67,8 @@ class PromptVersion(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "Prompt 版本"
+        verbose_name_plural = "Prompt 版本"
         ordering = ("key", "-version")
         constraints = [
             models.UniqueConstraint(
@@ -150,6 +152,8 @@ class AIRequestLog(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        verbose_name = "AI 請求紀錄"
+        verbose_name_plural = "AI 請求紀錄"
         ordering = ("-created_at", "id")
 
     def __str__(self) -> str:
@@ -205,13 +209,13 @@ class AIRequestLog(models.Model):
 
 
 class AssistantSessionStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    ENDED = "ended", "Ended"
+    ACTIVE = "active", "進行中"
+    ENDED = "ended", "已結束"
 
 
 class AssistantMessageRole(models.TextChoices):
-    USER = "user", "User"
-    ASSISTANT = "assistant", "Assistant"
+    USER = "user", "使用者"
+    ASSISTANT = "assistant", "助理"
 
 
 class AssistantSession(models.Model):
@@ -239,6 +243,8 @@ class AssistantSession(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "AI 助理對話"
+        verbose_name_plural = "AI 助理對話"
         ordering = ("-updated_at", "-created_at")
         indexes = [
             models.Index(fields=("user", "status", "-updated_at")),
@@ -297,6 +303,8 @@ class AssistantMessage(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "AI 助理訊息"
+        verbose_name_plural = "AI 助理訊息"
         ordering = ("created_at", "id")
         indexes = [
             models.Index(fields=("session", "created_at")),

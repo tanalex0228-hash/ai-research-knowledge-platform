@@ -66,14 +66,14 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         "updated_at",
     )
 
-    @admin.display(description="Stored source file")
+    @admin.display(description="已儲存原始檔")
     def stored_file_reference(self, obj):
         if obj and obj.file:
             from django.urls import reverse
             from django.utils.html import format_html
             url = reverse("public_site:document-download", args=[obj.id])
-            return format_html('<a href="{}" target="_blank">📥 下載/檢視 PDF 檔案</a><br><span class="help">Stored privately and immutable; create a new source document to replace it.</span>', url)
-        return "Stored privately and immutable; create a new source document to replace it."
+            return format_html('<a href="{}" target="_blank">下載／檢視 PDF 檔案</a><br><span class="help">檔案採私有儲存且不可直接覆蓋；如需替換，請建立新的原始研究文件。</span>', url)
+        return "檔案採私有儲存且不可直接覆蓋；如需替換，請建立新的原始研究文件。"
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
@@ -98,7 +98,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             {"fields": ("id", "research_work", "file", "visibility_scope")},
         ),
         (
-            "Private upload metadata (administrators only)",
+            "私有上傳 metadata（限管理員）",
             {
                 "fields": (
                     "original_filename",
@@ -112,7 +112,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Extraction",
+            "擷取狀態",
             {"fields": ("extraction_status", "extraction_error")},
         ),
     )
@@ -163,11 +163,11 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         deleted = hard_delete_source_documents(queryset)
         self.message_user(
             request,
-            f"Hard-deleted {deleted} source document(s).",
+            f"已直接刪除 {deleted} 份原始研究文件。",
             level=messages.WARNING,
         )
 
-    @admin.action(description="Hard delete selected source documents and derived records")
+    @admin.action(description="直接刪除選取的研究文件與衍生資料")
     def hard_delete_selected_source_documents(self, request, queryset):
         self.delete_queryset(request, queryset)
 

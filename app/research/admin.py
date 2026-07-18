@@ -209,7 +209,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
             deleted += 1
         self.message_user(
             request,
-            f"Hard-deleted {deleted} research work(s).",
+            f"已直接刪除 {deleted} 筆研究成果。",
             level=messages.WARNING,
         )
 
@@ -251,27 +251,27 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                 level=messages.WARNING,
             )
 
-    @admin.action(description="Lifecycle: Approve")
+    @admin.action(description="狀態：核准")
     def transition_to_approved(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.APPROVED)
 
-    @admin.action(description="Lifecycle: Publish")
+    @admin.action(description="狀態：發布")
     def transition_to_published(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
 
-    @admin.action(description="Lifecycle: Archive")
+    @admin.action(description="狀態：封存")
     def transition_to_archived(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.ARCHIVED)
 
-    @admin.action(description="Lifecycle: Reject")
+    @admin.action(description="狀態：退回")
     def transition_to_rejected(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.REJECTED)
 
-    @admin.action(description="Lifecycle: Restore")
+    @admin.action(description="狀態：還原為已發布")
     def restore_archived(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
 
-    @admin.action(description="✨ AI: Approve All Candidates & Publish")
+    @admin.action(description="AI：核准所有候選並發布")
     def approve_all_ai_candidates_and_publish(self, request, queryset):
         """Batch-approve all pending AI-extracted ReviewItems and auto-publish."""
         from review.models import ReviewItem, ReviewState, ReviewAction
@@ -292,7 +292,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                         item=item,
                         reviewer=request.user,
                         action=ReviewAction.APPROVE,
-                        reason="Batch approved via Django admin AI action.",
+                        reason="透過 Django 後台 AI 動作批次核准。",
                     )
                     work_approved += 1
                 except Exception:
@@ -309,7 +309,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                             research_work=work,
                             to_status=ResearchWorkStatus.APPROVED,
                             actor=request.user,
-                            reason="Admin batch-approved all AI candidates.",
+                            reason="管理員批次核准所有 AI 候選。",
                             request_id=request_id,
                         )
                         work.refresh_from_db()
@@ -317,19 +317,19 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                         research_work=work,
                         to_status=ResearchWorkStatus.PUBLISHED,
                         actor=request.user,
-                        reason="Auto-publish after batch AI candidate approval.",
+                        reason="批次核准 AI 候選後自動發布。",
                         request_id=request_id,
                     )
                 except ValidationError:
                     pass
         self.message_user(
             request,
-            f"Approved {total_approved} AI candidates across {total_works} work(s). "
-            f"{total_skipped} item(s) skipped.",
+            f"已核准 {total_approved} 筆 AI 候選，涵蓋 {total_works} 筆研究成果。"
+            f"已略過 {total_skipped} 筆項目。",
             level=messages.SUCCESS if total_approved else messages.WARNING,
         )
 
-    @admin.action(description="🔄 AI: Re-run Extraction Pipeline")
+    @admin.action(description="AI：重新執行文件擷取流程")
     def rerun_extraction_pipeline(self, request, queryset):
         """Re-trigger PDF extraction for all source documents of selected works."""
         from documents.models import SourceDocument, ExtractionStatus
@@ -348,15 +348,15 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                 queued += 1
         self.message_user(
             request,
-            f"Queued re-extraction for {queued} document(s).",
+            f"已排程重新擷取 {queued} 份文件。",
             level=messages.SUCCESS if queued else messages.WARNING,
         )
 
-    @admin.action(description="Hard delete selected research works and protected records")
+    @admin.action(description="直接刪除選取的研究成果與受保護紀錄")
     def hard_delete_selected_research_works(self, request, queryset):
         self.delete_queryset(request, queryset)
 
-    @admin.display(description="Status")
+    @admin.display(description="狀態")
     def status_badge(self, obj):
         colors = {
             "draft": "#aaa",
@@ -375,7 +375,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
             color, obj.get_status_display() if hasattr(obj, 'get_status_display') else obj.status
         )
 
-    @admin.display(description="📝 AI Candidates")
+    @admin.display(description="AI 候選")
     def review_item_count(self, obj):
         from review.models import ReviewItem, ReviewState
         pending = ReviewItem.objects.filter(target_id=obj.pk, state=ReviewState.PENDING).count()

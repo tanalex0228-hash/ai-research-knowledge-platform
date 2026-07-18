@@ -16,9 +16,9 @@ def normalize_person_name(value: str) -> str:
 
 
 class ProfessorStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    INACTIVE = "inactive", "Inactive"
-    ARCHIVED = "archived", "Archived"
+    ACTIVE = "active", "啟用"
+    INACTIVE = "inactive", "停用"
+    ARCHIVED = "archived", "封存"
 
 
 class ProfessorQuerySet(models.QuerySet):
@@ -66,11 +66,13 @@ class Professor(models.Model):
     objects = ProfessorQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "教師"
+        verbose_name_plural = "教師"
         ordering = ("display_name", "id")
         permissions = (
             (
                 "hard_delete_professor",
-                "Can hard delete professors referenced by governed research records",
+                "可直接刪除受治理紀錄保護的教師",
             ),
         )
         constraints = [
@@ -117,6 +119,8 @@ class ProfessorAlias(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "教師別名"
+        verbose_name_plural = "教師別名"
         ordering = ("alias", "id")
         constraints = [
             models.UniqueConstraint(

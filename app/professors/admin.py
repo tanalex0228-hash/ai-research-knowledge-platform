@@ -101,11 +101,11 @@ class ProfessorAdmin(admin.ModelAdmin):
             deleted += 1
         self.message_user(
             request,
-            f"Hard-deleted {deleted} professor profile(s).",
+            f"已直接刪除 {deleted} 筆教師資料。",
             level=messages.WARNING,
         )
 
-    @admin.action(description="Hard delete selected professors and protected references")
+    @admin.action(description="直接刪除選取的教師與受保護關聯")
     def hard_delete_selected_professors(self, request, queryset):
         self.delete_queryset(request, queryset)
 

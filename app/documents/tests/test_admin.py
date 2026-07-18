@@ -279,7 +279,7 @@ class SourceDocumentAdminPermissionTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Stored privately and immutable")
+        self.assertContains(response, "檔案採私有儲存且不可直接覆蓋")
         self.assertNotContains(response, 'input type="file"')
         self.assertNotContains(response, 'name="research_work"')
 

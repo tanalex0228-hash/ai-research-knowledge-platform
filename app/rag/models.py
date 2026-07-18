@@ -15,24 +15,24 @@ from .fields import PortableVectorField
 
 
 class VectorStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    READY = "ready", "Ready"
-    STALE = "stale", "Stale"
-    FAILED = "failed", "Failed"
-    DISABLED = "disabled", "Disabled"
+    PENDING = "pending", "等待中"
+    READY = "ready", "就緒"
+    STALE = "stale", "過期"
+    FAILED = "failed", "失敗"
+    DISABLED = "disabled", "停用"
 
 
 class RetrievalKind(models.TextChoices):
-    KEYWORD = "keyword", "Permission-aware keyword evidence"
-    SEMANTIC = "semantic", "Semantic vector retrieval"
+    KEYWORD = "keyword", "權限感知關鍵字證據"
+    SEMANTIC = "semantic", "語意向量檢索"
 
 
 class RetrievalStatus(models.TextChoices):
-    STARTED = "started", "Started"
-    COMPLETED = "completed", "Completed"
-    DENIED = "denied", "Denied"
-    FAILED = "failed", "Failed"
-    NOT_IMPLEMENTED = "not_implemented", "Not implemented"
+    STARTED = "started", "開始"
+    COMPLETED = "completed", "完成"
+    DENIED = "denied", "拒絕"
+    FAILED = "failed", "失敗"
+    NOT_IMPLEMENTED = "not_implemented", "尚未實作"
 
 
 def _scope_rank(value: str) -> int:
@@ -70,6 +70,8 @@ class VectorDocument(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "向量文件"
+        verbose_name_plural = "向量文件"
         ordering = ("-created_at", "id")
 
     def __str__(self) -> str:
@@ -128,6 +130,8 @@ class VectorChunk(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "向量段落"
+        verbose_name_plural = "向量段落"
         ordering = ("vector_document_id", "source_chunk__chunk_index", "id")
         constraints = [
             models.CheckConstraint(
@@ -189,6 +193,8 @@ class EmbeddingRecord(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "Embedding 紀錄"
+        verbose_name_plural = "Embedding 紀錄"
         ordering = ("-created_at", "id")
         constraints = [
             models.UniqueConstraint(
@@ -262,6 +268,8 @@ class RetrievalLog(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        verbose_name = "檢索紀錄"
+        verbose_name_plural = "檢索紀錄"
         ordering = ("-created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -303,6 +311,8 @@ class CitationSource(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "引用來源"
+        verbose_name_plural = "引用來源"
         ordering = ("retrieval_log_id", "rank", "id")
         constraints = [
             models.UniqueConstraint(
@@ -347,4 +357,3 @@ class CitationSource(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Citation evidence is append-only and cannot be deleted.")
-

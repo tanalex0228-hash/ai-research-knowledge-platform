@@ -17,31 +17,31 @@ def normalize_research_text(value: str) -> str:
 
 
 class ResearchWorkType(models.TextChoices):
-    UNDERGRADUATE_PROJECT = "undergraduate_project", "Undergraduate project"
-    MASTER_THESIS = "master_thesis", "Master thesis"
-    RESEARCH_PROJECT = "research_project", "Research project"
-    JOURNAL_ARTICLE = "journal_article", "Journal article"
-    CONFERENCE_PAPER = "conference_paper", "Conference paper"
-    OTHER = "other", "Other"
+    UNDERGRADUATE_PROJECT = "undergraduate_project", "大學部專題"
+    MASTER_THESIS = "master_thesis", "碩士論文"
+    RESEARCH_PROJECT = "research_project", "研究計畫"
+    JOURNAL_ARTICLE = "journal_article", "期刊論文"
+    CONFERENCE_PAPER = "conference_paper", "研討會論文"
+    OTHER = "other", "其他"
 
 
 class ResearchWorkStatus(models.TextChoices):
-    DRAFT = "draft", "Draft"
-    UPLOADED = "uploaded", "Uploaded"
-    PARSED = "parsed", "Parsed"
-    AI_EXTRACTED = "ai_extracted", "AI extracted"
-    UNDER_REVIEW = "under_review", "Under review"
-    APPROVED = "approved", "Approved"
-    PUBLISHED = "published", "Published"
-    ARCHIVED = "archived", "Archived"
-    REJECTED = "rejected", "Rejected"
+    DRAFT = "draft", "草稿"
+    UPLOADED = "uploaded", "已上傳"
+    PARSED = "parsed", "已解析"
+    AI_EXTRACTED = "ai_extracted", "AI 已擷取"
+    UNDER_REVIEW = "under_review", "審核中"
+    APPROVED = "approved", "已核准"
+    PUBLISHED = "published", "已發布"
+    ARCHIVED = "archived", "已封存"
+    REJECTED = "rejected", "已退回"
 
 
 class SourceQuality(models.TextChoices):
-    UNKNOWN = "unknown", "Unknown"
-    LOW = "low", "Low"
-    MEDIUM = "medium", "Medium"
-    HIGH = "high", "High"
+    UNKNOWN = "unknown", "未知"
+    LOW = "low", "低"
+    MEDIUM = "medium", "中"
+    HIGH = "high", "高"
 
 
 class ResearchWorkQuerySet(models.QuerySet):
@@ -152,11 +152,13 @@ class ResearchWork(models.Model):
     objects = ResearchWorkQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "研究成果"
+        verbose_name_plural = "研究成果"
         ordering = ("-year", "title", "id")
         permissions = (
             (
                 "hard_delete_researchwork",
-                "Can hard delete research works and protected governance records",
+                "可直接刪除研究成果與受保護治理紀錄",
             ),
         )
         constraints = [
@@ -241,6 +243,8 @@ class ResearchWorkTransition(models.Model):
     objects = ResearchWorkTransitionQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "研究成果狀態轉換"
+        verbose_name_plural = "研究成果狀態轉換"
         ordering = ("created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -276,8 +280,8 @@ class ResearchWorkTransition(models.Model):
 
 
 class StudentStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    ARCHIVED = "archived", "Archived"
+    ACTIVE = "active", "啟用"
+    ARCHIVED = "archived", "封存"
 
 
 class StudentQuerySet(models.QuerySet):
@@ -317,6 +321,8 @@ class Student(models.Model):
     objects = StudentQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "研究學生"
+        verbose_name_plural = "研究學生"
         ordering = ("display_name", "id")
         constraints = [
             models.CheckConstraint(
@@ -351,9 +357,9 @@ class Student(models.Model):
 
 
 class AdvisorRole(models.TextChoices):
-    PRIMARY = "primary", "Primary advisor"
-    CO_ADVISOR = "co_advisor", "Co-advisor"
-    OTHER = "other", "Other"
+    PRIMARY = "primary", "指導教授"
+    CO_ADVISOR = "co_advisor", "共同指導"
+    OTHER = "other", "其他"
 
 
 class WorkAdvisor(models.Model):
@@ -373,6 +379,8 @@ class WorkAdvisor(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "研究成果指導教師"
+        verbose_name_plural = "研究成果指導教師"
         ordering = ("position", "id")
         constraints = [
             models.UniqueConstraint(
@@ -409,6 +417,8 @@ class WorkAuthor(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "研究成果作者"
+        verbose_name_plural = "研究成果作者"
         ordering = ("position", "id")
         constraints = [
             models.UniqueConstraint(
@@ -430,21 +440,21 @@ class WorkAuthor(models.Model):
 
 
 class RelationshipSource(models.TextChoices):
-    MANUAL = "manual", "Manual"
-    IMPORTED = "imported", "Imported"
-    AI_APPROVED = "ai_approved", "Approved AI candidate"
+    MANUAL = "manual", "人工"
+    IMPORTED = "imported", "匯入"
+    AI_APPROVED = "ai_approved", "AI 核准候選"
 
 
 class RelationshipStatus(models.TextChoices):
-    APPROVED = "approved", "Approved"
-    ARCHIVED = "archived", "Archived"
+    APPROVED = "approved", "已核准"
+    ARCHIVED = "archived", "已封存"
 
 
 class FieldRelevance(models.TextChoices):
-    CORE = "core", "Core"
-    RELATED = "related", "Related"
-    WEAK = "weak", "Weak"
-    INCIDENTAL = "incidental", "Incidental"
+    CORE = "core", "核心"
+    RELATED = "related", "相關"
+    WEAK = "weak", "弱相關"
+    INCIDENTAL = "incidental", "偶然提及"
 
 
 class WorkField(models.Model):
@@ -480,6 +490,8 @@ class WorkField(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "研究成果領域"
+        verbose_name_plural = "研究成果領域"
         ordering = ("-is_primary", "research_field__display_name", "id")
         constraints = [
             models.UniqueConstraint(
@@ -510,8 +522,8 @@ class WorkField(models.Model):
 
 
 class MethodUsage(models.TextChoices):
-    PRIMARY = "primary", "Primary"
-    SUPPORTING = "supporting", "Supporting"
+    PRIMARY = "primary", "主要"
+    SUPPORTING = "supporting", "輔助"
 
 
 class WorkMethod(models.Model):
@@ -546,6 +558,8 @@ class WorkMethod(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "研究成果方法"
+        verbose_name_plural = "研究成果方法"
         ordering = ("usage", "research_method__display_name", "id")
         constraints = [
             models.UniqueConstraint(
@@ -616,6 +630,8 @@ class FeaturedWork(models.Model):
     objects = FeaturedWorkQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "首頁精選研究"
+        verbose_name_plural = "首頁精選研究"
         ordering = ("display_order", "-created_at")
         constraints = [
             models.CheckConstraint(
@@ -631,14 +647,14 @@ class FeaturedWork(models.Model):
 
 
 class AwardType(models.TextChoices):
-    BEST_PROJECT = "best_project", "Best project"
-    EXCELLENCE = "excellence", "Excellence"
-    OTHER = "other", "Other"
+    BEST_PROJECT = "best_project", "最佳專題"
+    EXCELLENCE = "excellence", "優良作品"
+    OTHER = "other", "其他"
 
 
 class AwardStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    ARCHIVED = "archived", "Archived"
+    ACTIVE = "active", "啟用"
+    ARCHIVED = "archived", "封存"
 
 
 class AwardQuerySet(models.QuerySet):
@@ -704,6 +720,8 @@ class Award(models.Model):
     objects = AwardQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "獎項"
+        verbose_name_plural = "獎項"
         ordering = ("-award_year", "name", "id")
         constraints = [
             models.UniqueConstraint(

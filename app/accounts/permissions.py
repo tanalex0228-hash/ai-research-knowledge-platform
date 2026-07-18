@@ -11,10 +11,10 @@ from django.db import models
 
 
 class VisibilityScope(models.TextChoices):
-    PUBLIC = "public", "Public"
-    STUDENT = "student", "Students and staff"
-    TEACHER = "teacher", "Teachers and administrators"
-    ADMIN = "admin", "Administrators only"
+    PUBLIC = "public", "公開"
+    STUDENT = "student", "學生與教職員"
+    TEACHER = "teacher", "教師與管理員"
+    ADMIN = "admin", "管理員"
 
 
 ROLE_STUDENT = "student"

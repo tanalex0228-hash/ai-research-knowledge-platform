@@ -18,10 +18,10 @@ class UserRoleInline(admin.TabularInline):
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     fieldsets = DjangoUserAdmin.fieldsets + (
-        ("Platform identity", {"fields": ("id",)}),
+        ("平台身份", {"fields": ("id",)}),
     )
     add_fieldsets = DjangoUserAdmin.add_fieldsets + (
-        ("Contact", {"fields": ("email",)}),
+        ("聯絡資訊", {"fields": ("email",)}),
     )
     inlines = (UserRoleInline,)
     list_display = ("username", "email", "is_active", "is_staff", "last_login")
@@ -56,11 +56,11 @@ class UserAdmin(DjangoUserAdmin):
             deleted += 1
         self.message_user(
             request,
-            f"Hard-deleted {deleted} user account(s).",
+            f"已直接刪除 {deleted} 個使用者帳號。",
             level=messages.WARNING,
         )
 
-    @admin.action(description="Hard delete selected users and protected references")
+    @admin.action(description="直接刪除選取的使用者與受保護關聯")
     def hard_delete_selected_users(self, request, queryset):
         self.delete_queryset(request, queryset)
 

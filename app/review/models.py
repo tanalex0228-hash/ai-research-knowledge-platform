@@ -14,49 +14,49 @@ from documents.choices import VisibilityScope
 
 
 class ExtractionJobStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    RUNNING = "running", "Running"
-    SUCCEEDED = "succeeded", "Succeeded"
-    FAILED = "failed", "Failed"
-    CANCELLED = "cancelled", "Cancelled"
+    PENDING = "pending", "等待中"
+    RUNNING = "running", "執行中"
+    SUCCEEDED = "succeeded", "成功"
+    FAILED = "failed", "失敗"
+    CANCELLED = "cancelled", "已取消"
 
 
 class ExtractionResultType(models.TextChoices):
-    SUMMARY = "summary", "Summary"
-    FIELD = "field", "Research field"
-    METHOD = "method", "Research method"
-    TAG = "tag", "AI tag"
-    VARIABLE = "variable", "Variable"
-    DATASET = "dataset", "Dataset"
-    RELATIONSHIP = "relationship", "Relationship"
+    SUMMARY = "summary", "摘要"
+    FIELD = "field", "研究領域"
+    METHOD = "method", "研究方法"
+    TAG = "tag", "AI 標籤"
+    VARIABLE = "variable", "變數"
+    DATASET = "dataset", "資料集"
+    RELATIONSHIP = "relationship", "關係"
 
 
 class ExtractionResultStatus(models.TextChoices):
-    CANDIDATE = "candidate", "Candidate knowledge"
-    SUPERSEDED = "superseded", "Superseded"
+    CANDIDATE = "candidate", "候選知識"
+    SUPERSEDED = "superseded", "已取代"
 
 
 class ReviewState(models.TextChoices):
-    PENDING = "pending", "Pending"
-    TEACHER_REVIEW = "teacher_review", "Teacher review requested"
-    APPROVED = "approved", "Approved"
-    REJECTED = "rejected", "Rejected"
-    ARCHIVED = "archived", "Archived"
+    PENDING = "pending", "待審核"
+    TEACHER_REVIEW = "teacher_review", "教師審核中"
+    APPROVED = "approved", "已核准"
+    REJECTED = "rejected", "已拒絕"
+    ARCHIVED = "archived", "已封存"
 
 
 class ReviewAction(models.TextChoices):
-    APPROVE = "approve", "Approve"
-    EDIT = "edit", "Edit and approve"
-    REJECT = "reject", "Reject"
-    REQUEST_TEACHER_REVIEW = "request_teacher_review", "Request teacher review"
-    ARCHIVE = "archive", "Archive"
+    APPROVE = "approve", "核准"
+    EDIT = "edit", "編輯並核准"
+    REJECT = "reject", "拒絕"
+    REQUEST_TEACHER_REVIEW = "request_teacher_review", "請教師審核"
+    ARCHIVE = "archive", "封存"
 
 
 class ReviewTargetType(models.TextChoices):
-    RESEARCH_WORK = "research_work", "Research work"
-    PROFESSOR = "professor", "Professor"
-    TAXONOMY = "taxonomy", "Taxonomy"
-    KNOWLEDGE_EDGE = "knowledge_edge", "Knowledge edge"
+    RESEARCH_WORK = "research_work", "研究成果"
+    PROFESSOR = "professor", "教師"
+    TAXONOMY = "taxonomy", "分類"
+    KNOWLEDGE_EDGE = "knowledge_edge", "知識關係"
 
 
 TERMINAL_REVIEW_STATE_VALUES = (
@@ -167,6 +167,8 @@ class AIExtractionJob(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "AI 擷取工作"
+        verbose_name_plural = "AI 擷取工作"
         ordering = ("-created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -245,6 +247,8 @@ class AIExtractionResult(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "AI 擷取結果"
+        verbose_name_plural = "AI 擷取結果"
         ordering = ("job_id", "created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -311,6 +315,8 @@ class AIExtractionEvidence(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "AI 擷取證據"
+        verbose_name_plural = "AI 擷取證據"
         ordering = ("extraction_result_id", "document_chunk__chunk_index", "id")
         constraints = [
             models.UniqueConstraint(
@@ -439,6 +445,8 @@ class ReviewItem(models.Model):
     objects = ReviewItemQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "審核項目"
+        verbose_name_plural = "審核項目"
         ordering = ("state", "created_at", "id")
         constraints = [
             models.CheckConstraint(
@@ -599,6 +607,8 @@ class ReviewDecision(models.Model):
     objects = ReviewDecisionQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "審核決策"
+        verbose_name_plural = "審核決策"
         ordering = ("review_item_id", "created_at", "id")
         constraints = [
             models.CheckConstraint(

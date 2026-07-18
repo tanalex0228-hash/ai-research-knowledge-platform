@@ -8,27 +8,27 @@ from django.db import models
 
 
 class NodeType(models.TextChoices):
-    RESEARCH_WORK = "research_work", "Research work"
-    PROFESSOR = "professor", "Professor"
-    STUDENT = "student", "Student"
-    RESEARCH_FIELD = "research_field", "Research field"
-    RESEARCH_METHOD = "research_method", "Research method"
-    AI_TAG = "ai_tag", "AI tag"
-    DATASET = "dataset", "Dataset"
-    VARIABLE = "variable", "Variable"
-    NEWS_EVENT = "news_event", "News event"
+    RESEARCH_WORK = "research_work", "研究成果"
+    PROFESSOR = "professor", "教師"
+    STUDENT = "student", "學生"
+    RESEARCH_FIELD = "research_field", "研究領域"
+    RESEARCH_METHOD = "research_method", "研究方法"
+    AI_TAG = "ai_tag", "AI 標籤"
+    DATASET = "dataset", "資料集"
+    VARIABLE = "variable", "變數"
+    NEWS_EVENT = "news_event", "新聞事件"
 
 
 class EdgeType(models.TextChoices):
-    ADVISED_BY = "advised_by", "Advised by"
-    AUTHORED_BY = "authored_by", "Authored by"
-    BELONGS_TO_FIELD = "belongs_to_field", "Belongs to field"
-    USES_METHOD = "uses_method", "Uses method"
-    HAS_TAG = "has_tag", "Has tag"
-    USES_DATASET = "uses_dataset", "Uses dataset"
-    STUDIES_VARIABLE = "studies_variable", "Studies variable"
-    RELATED_TO_NEWS_EVENT = "related_to_news_event", "Related to news event"
-    SIMILAR_TO_WORK = "similar_to_work", "Similar to work"
+    ADVISED_BY = "advised_by", "由教師指導"
+    AUTHORED_BY = "authored_by", "由學生撰寫"
+    BELONGS_TO_FIELD = "belongs_to_field", "屬於研究領域"
+    USES_METHOD = "uses_method", "使用研究方法"
+    HAS_TAG = "has_tag", "具有標籤"
+    USES_DATASET = "uses_dataset", "使用資料集"
+    STUDIES_VARIABLE = "studies_variable", "研究變數"
+    RELATED_TO_NEWS_EVENT = "related_to_news_event", "關聯新聞事件"
+    SIMILAR_TO_WORK = "similar_to_work", "相似研究成果"
 
 
 NodePair = tuple[str, str]

@@ -15,22 +15,22 @@ from .registry import EdgeType, NodeType, edge_policy, validate_edge_types
 
 
 class NodeStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    ARCHIVED = "archived", "Archived"
+    ACTIVE = "active", "啟用"
+    ARCHIVED = "archived", "封存"
 
 
 class EdgeStatus(models.TextChoices):
-    CANDIDATE = "candidate", "Candidate"
-    APPROVED = "approved", "Approved"
-    REJECTED = "rejected", "Rejected"
-    ARCHIVED = "archived", "Archived"
+    CANDIDATE = "candidate", "候選"
+    APPROVED = "approved", "已核准"
+    REJECTED = "rejected", "已拒絕"
+    ARCHIVED = "archived", "已封存"
 
 
 class EvidenceSourceType(models.TextChoices):
-    MANUAL = "manual", "Manual"
-    SOURCE_DOCUMENT = "source_document", "Source document"
-    DOCUMENT_CHUNK = "document_chunk", "Document chunk"
-    AI_EXTRACTION = "ai_extraction", "AI extraction"
+    MANUAL = "manual", "人工"
+    SOURCE_DOCUMENT = "source_document", "原始文件"
+    DOCUMENT_CHUNK = "document_chunk", "文件段落"
+    AI_EXTRACTION = "ai_extraction", "AI 擷取"
 
 
 class KnowledgeNodeQuerySet(models.QuerySet):
@@ -77,6 +77,8 @@ class KnowledgeNode(models.Model):
     objects = KnowledgeNodeQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "知識節點"
+        verbose_name_plural = "知識節點"
         ordering = ("node_type", "label", "id")
         constraints = [
             models.UniqueConstraint(
@@ -148,6 +150,8 @@ class KnowledgeEdge(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "知識關係"
+        verbose_name_plural = "知識關係"
         ordering = ("source_id", "edge_type", "target_id")
         constraints = [
             models.UniqueConstraint(

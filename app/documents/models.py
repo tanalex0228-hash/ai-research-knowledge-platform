@@ -122,11 +122,13 @@ class SourceDocument(models.Model):
     objects = SourceDocumentQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "原始研究文件"
+        verbose_name_plural = "原始研究文件"
         ordering = ("-uploaded_at", "id")
         permissions = (
             (
                 "hard_delete_sourcedocument",
-                "Can hard delete source documents and protected derived records",
+                "可直接刪除研究文件與衍生資料",
             ),
         )
         constraints = [
@@ -251,6 +253,8 @@ class DocumentChunk(models.Model):
     objects = VisibilityQuerySet.as_manager()
 
     class Meta:
+        verbose_name = "文件段落"
+        verbose_name_plural = "文件段落"
         ordering = ("source_document_id", "chunk_index")
         constraints = [
             models.UniqueConstraint(

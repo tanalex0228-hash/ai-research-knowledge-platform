@@ -94,7 +94,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    @admin.display(description="Research Work")
+    @admin.display(description="研究成果")
     def work_title(self, obj):
         from research.models import ResearchWork
         from django.utils.html import format_html
@@ -107,7 +107,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
         except Exception:
             return str(obj.target_id)[:20]
 
-    @admin.display(description="Candidate Value")
+    @admin.display(description="候選值")
     def candidate_preview(self, obj):
         from django.utils.html import format_html
         val = obj.candidate_value
@@ -118,7 +118,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
         preview = str(display)[:60]
         return format_html('<code style="font-size:0.8rem;">{}</code>', preview)
 
-    @admin.display(description="Confidence")
+    @admin.display(description="信心分數")
     def confidence_display(self, obj):
         from django.utils.html import format_html
         pct = int((obj.confidence or 0) * 100)
@@ -147,41 +147,41 @@ class ReviewItemAdmin(admin.ModelAdmin):
         if succeeded:
             self.message_user(
                 request,
-                f"Recorded {succeeded} immutable review decision(s).",
+                f"已記錄 {succeeded} 筆不可變審核決策。",
                 level=messages.SUCCESS,
             )
         if failures:
             self.message_user(
                 request,
-                "Skipped review items: " + "; ".join(failures[:5]),
+                "已略過審核項目：" + "; ".join(failures[:5]),
                 level=messages.WARNING,
             )
 
-    @admin.action(description="✅ Approve selected")
+    @admin.action(description="核准選取項目")
     def approve_selected(self, request, queryset):
         self._apply_decision(
             request,
             queryset,
             action=ReviewAction.APPROVE,
-            reason="Approved through the Django admin governed action.",
+            reason="透過 Django 後台治理動作核准。",
         )
 
-    @admin.action(description="❌ Reject selected")
+    @admin.action(description="拒絕選取項目")
     def reject_selected(self, request, queryset):
         self._apply_decision(
             request,
             queryset,
             action=ReviewAction.REJECT,
-            reason="Rejected through the Django admin governed action.",
+            reason="透過 Django 後台治理動作拒絕。",
         )
 
-    @admin.action(description="🗄 Archive selected")
+    @admin.action(description="封存選取項目")
     def archive_selected(self, request, queryset):
         self._apply_decision(
             request,
             queryset,
             action=ReviewAction.ARCHIVE,
-            reason="Archived through the Django admin governed action.",
+            reason="透過 Django 後台治理動作封存。",
         )
 
 
