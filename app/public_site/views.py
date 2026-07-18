@@ -137,7 +137,7 @@ def research_work_detail(request, work_id):
         research_work=work,
         professor__status="active",
         professor__visibility_scope__in=scopes,
-    ).select_related("professor")
+    ).select_related("professor").order_by("position")
     fields = WorkField.objects.filter(
         research_work=work,
         status="approved",
@@ -153,17 +153,24 @@ def research_work_detail(request, work_id):
     documents = SourceDocument.objects.visible_to(request.user).filter(research_work=work).only(
         "id", "research_work_id", "visibility_scope", "extraction_status", "uploaded_at"
     )
+    from research.models import WorkAuthor
+    authors = WorkAuthor.objects.filter(
+        research_work=work,
+        student__visibility_scope__in=scopes,
+    ).select_related("student").order_by("position")
     return render(
         request,
         "public_site/research_work_detail.html",
         {
             "work": work,
             "advisors": advisors,
+            "authors": authors,
             "fields": fields,
             "methods": methods,
             "documents": documents,
         },
     )
+
 
 
 @require_GET

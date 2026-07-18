@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.utils.html import format_html
 
 from accounts.permissions import is_platform_admin, visible_scopes_for
 from professors.services import linked_professor_for_teacher
@@ -129,7 +130,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         SourceDocumentInline,
         ResearchWorkTransitionInline,
     )
-    list_display = ("title", "year", "work_type", "status", "visibility_scope", "source_quality")
+    list_display = ("title", "year", "work_type", "status_badge", "visibility_scope", "source_quality", "review_item_count")
     list_filter = ("status", "visibility_scope", "work_type", "source_quality", "year")
     search_fields = ("title", "normalized_title", "abstract")
     autocomplete_fields = ("created_by", "updated_by")
@@ -141,6 +142,8 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         "transition_to_archived",
         "transition_to_rejected",
         "restore_archived",
+        "approve_all_ai_candidates_and_publish",
+        "rerun_extraction_pipeline",
     )
 
     def get_queryset(self, request):
@@ -239,6 +242,115 @@ class ResearchWorkAdmin(admin.ModelAdmin):
     @admin.action(description="Lifecycle: Restore")
     def restore_archived(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
+
+    @admin.action(description="✨ AI: Approve All Candidates & Publish")
+    def approve_all_ai_candidates_and_publish(self, request, queryset):
+        """Batch-approve all pending AI-extracted ReviewItems and auto-publish."""
+        from review.models import ReviewItem, ReviewState, ReviewAction
+        from review.services import decide_review_item
+        request_id = request_id_for(request)
+        total_approved = 0
+        total_skipped = 0
+        total_works = 0
+        for work in queryset:
+            pending_items = ReviewItem.objects.filter(
+                target_id=work.pk,
+                state=ReviewState.PENDING,
+            )
+            work_approved = 0
+            for item in pending_items:
+                try:
+                    decide_review_item(
+                        item=item,
+                        reviewer=request.user,
+                        action=ReviewAction.APPROVE,
+                        reason="Batch approved via Django admin AI action.",
+                    )
+                    work_approved += 1
+                except Exception:
+                    total_skipped += 1
+            total_approved += work_approved
+            if work_approved > 0:
+                total_works += 1
+            # Auto-publish if still in reviewable state
+            work.refresh_from_db()
+            if work.status in ("under_review", "approved", "ai_extracted"):
+                try:
+                    if work.status in ("under_review", "ai_extracted"):
+                        transition_research_work(
+                            research_work=work,
+                            to_status=ResearchWorkStatus.APPROVED,
+                            actor=request.user,
+                            reason="Admin batch-approved all AI candidates.",
+                            request_id=request_id,
+                        )
+                        work.refresh_from_db()
+                    transition_research_work(
+                        research_work=work,
+                        to_status=ResearchWorkStatus.PUBLISHED,
+                        actor=request.user,
+                        reason="Auto-publish after batch AI candidate approval.",
+                        request_id=request_id,
+                    )
+                except ValidationError:
+                    pass
+        self.message_user(
+            request,
+            f"Approved {total_approved} AI candidates across {total_works} work(s). "
+            f"{total_skipped} item(s) skipped.",
+            level=messages.SUCCESS if total_approved else messages.WARNING,
+        )
+
+    @admin.action(description="🔄 AI: Re-run Extraction Pipeline")
+    def rerun_extraction_pipeline(self, request, queryset):
+        """Re-trigger PDF extraction for all source documents of selected works."""
+        from documents.models import SourceDocument, ExtractionStatus
+        from documents.services import queue_document_extraction
+        queued = 0
+        for work in queryset:
+            for doc in SourceDocument.objects.filter(research_work=work):
+                from django.db import connection
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE documents_sourcedocument SET extraction_status=%s, extraction_error=%s WHERE id=%s",
+                        [ExtractionStatus.PENDING, "", str(doc.id)]
+                    )
+                doc.refresh_from_db()
+                queue_document_extraction(doc)
+                queued += 1
+        self.message_user(
+            request,
+            f"Queued re-extraction for {queued} document(s).",
+            level=messages.SUCCESS if queued else messages.WARNING,
+        )
+
+    @admin.display(description="Status")
+    def status_badge(self, obj):
+        colors = {
+            "draft": "#aaa",
+            "uploaded": "#17a2b8",
+            "parsed": "#6f42c1",
+            "ai_extracted": "#fd7e14",
+            "under_review": "#ffc107",
+            "approved": "#28a745",
+            "published": "#007bff",
+            "archived": "#6c757d",
+            "rejected": "#dc3545",
+        }
+        color = colors.get(obj.status, "#aaa")
+        return format_html(
+            '<span style="background:{};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold">{}</span>',
+            color, obj.get_status_display() if hasattr(obj, 'get_status_display') else obj.status
+        )
+
+    @admin.display(description="📝 AI Candidates")
+    def review_item_count(self, obj):
+        from review.models import ReviewItem, ReviewState
+        pending = ReviewItem.objects.filter(target_id=obj.pk, state=ReviewState.PENDING).count()
+        total = ReviewItem.objects.filter(target_id=obj.pk).count()
+        if pending > 0:
+            return format_html('<span style="color:#e67e22;font-weight:bold">{} pending / {} total</span>', pending, total)
+        return format_html('<span style="color:#27ae60">{} total</span>', total)
 
 
 @admin.register(Student)

@@ -1,6 +1,192 @@
 {% extends "public_site/base.html" %}
-{% block title %}{{ work.title }}｜研究作品{% endblock %}
+{% block title %}{{ work.title }}｜師生研究平台{% endblock %}
 {% block content %}
-<section class="page-header"><div class="container"><p class="eyebrow">{{ work.get_work_type_display }}{% if work.year %} · {{ work.year }}{% endif %}</p><h1>{{ work.title }}</h1><div class="d-flex flex-wrap gap-2 mt-3">{% for link in fields %}<span class="tag">{{ link.research_field.display_name }}</span>{% endfor %}{% for link in methods %}<span class="tag tag-method">{{ link.research_method.display_name }}</span>{% endfor %}</div></div></section>
-<section class="container py-5"><div class="row g-5"><div class="col-lg-8"><h2 class="h4">摘要</h2><div class="work-abstract">{{ work.abstract|linebreaks|default:"尚無公開摘要。" }}</div></div><aside class="col-lg-4"><div class="metadata-panel"><h2 class="h5">研究資訊</h2><dl><dt>年度</dt><dd>{{ work.year|default:"—" }}</dd><dt>語言</dt><dd>{{ work.language|default:"—" }}</dd><dt>指導教師</dt><dd>{% for link in advisors %}<a href="{% url 'public_site:professor-detail' link.professor.id %}">{{ link.professor.display_name }}</a>{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</dd><dt>文件處理</dt><dd>{% for document in documents %}<div>{{ document.get_extraction_status_display }} · <a href="{% url 'public_site:document-download' document.id %}">檢視 PDF</a></div>{% empty %}尚未上傳或無權限檢視{% endfor %}</dd></dl></div></aside></div></section>
+
+<!-- Hero Section -->
+<section class="page-header" style="padding: 3rem 0 2.5rem; position:relative; overflow:hidden;">
+  <div class="container" style="position:relative; z-index:1;">
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <span class="tag" style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
+        {{ work.get_work_type_display }}
+      </span>
+      {% if work.year %}
+        <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">{{ work.year }} 年度</span>
+      {% endif %}
+      {% if work.language %}
+        <span style="color:rgba(255,255,255,0.5); font-size:0.8rem;">·</span>
+        <span style="color:rgba(255,255,255,0.6); font-size:0.8rem;">
+          {% if work.language == "zh-Hant" %}繁體中文
+          {% elif work.language == "zh-Hans" %}簡體中文
+          {% elif work.language == "en" %}English
+          {% else %}{{ work.language }}{% endif %}
+        </span>
+      {% endif %}
+    </div>
+    <h1 class="display-6 fw-bold mb-4" style="line-height:1.3; max-width:800px;">{{ work.title }}</h1>
+
+    <!-- Tags row -->
+    <div class="d-flex flex-wrap gap-2">
+      {% for link in fields %}
+        <span class="tag" style="background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.2);">
+          🏷 {{ link.research_field.display_name }}
+        </span>
+      {% endfor %}
+      {% for link in methods %}
+        <span class="tag tag-method" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);">
+          🔬 {{ link.research_method.display_name }}
+        </span>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<!-- Main Content -->
+<section class="container py-5">
+  <div class="row g-5">
+
+    <!-- Left: Abstract & Authors -->
+    <div class="col-lg-8">
+
+      <!-- Abstract -->
+      <div class="card-glass p-4 mb-4">
+        <h2 class="h5 mb-3" style="color:var(--primary);">📋 摘要</h2>
+        {% if work.abstract %}
+          <div class="work-abstract" style="line-height:1.9; color:rgba(255,255,255,0.85);">
+            {{ work.abstract|linebreaks }}
+          </div>
+        {% else %}
+          <p style="color:rgba(255,255,255,0.4); font-style:italic;">尚無公開摘要。</p>
+        {% endif %}
+      </div>
+
+      <!-- Authors / Students -->
+      {% if authors %}
+      <div class="card-glass p-4 mb-4">
+        <h2 class="h5 mb-3" style="color:var(--primary);">👥 研究學生</h2>
+        <div class="d-flex flex-wrap gap-2">
+          {% for link in authors %}
+            <div style="display:flex; align-items:center; gap:0.5rem; background:rgba(255,255,255,0.06); border-radius:8px; padding:0.4rem 0.8rem; border:1px solid rgba(255,255,255,0.1);">
+              <span style="width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg,var(--primary),var(--accent)); display:inline-flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; color:#fff;">
+                {{ link.student.display_name|slice:":1" }}
+              </span>
+              <span style="font-size:0.9rem; color:rgba(255,255,255,0.85);">{{ link.student.display_name }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- PDF Documents -->
+      {% if documents %}
+      <div class="card-glass p-4 mb-4">
+        <h2 class="h5 mb-3" style="color:var(--primary);">📄 研究文件</h2>
+        {% for document in documents %}
+          <div class="d-flex align-items-center justify-content-between p-3 mb-2"
+               style="background:rgba(255,255,255,0.05); border-radius:10px; border:1px solid rgba(255,255,255,0.1);">
+            <div class="d-flex align-items-center gap-3">
+              <span style="font-size:2rem;">📕</span>
+              <div>
+                <div style="font-size:0.85rem; font-weight:600; color:rgba(255,255,255,0.9);">
+                  研究報告 PDF
+                </div>
+                <div style="font-size:0.75rem; color:rgba(255,255,255,0.45);">
+                  上傳於 {{ document.uploaded_at|date:"Y/m/d" }}
+                </div>
+              </div>
+            </div>
+            <a href="{% url 'public_site:document-download' document.id %}"
+               id="btn-download-{{ document.id }}"
+               class="btn btn-primary btn-sm"
+               style="font-size:0.8rem; padding:0.4rem 1rem;"
+               target="_blank" rel="noopener noreferrer">
+              ⬇ 下載 PDF
+            </a>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- Right: Metadata Sidebar -->
+    <aside class="col-lg-4">
+      <div class="card-glass p-4 sticky-top" style="top:100px;">
+        <h2 class="h6 mb-3" style="color:rgba(255,255,255,0.5); text-transform:uppercase; letter-spacing:0.1em; font-size:0.7rem;">研究資訊</h2>
+
+        <dl style="margin:0;">
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.3rem;">年度</dt>
+          <dd style="font-size:1rem; font-weight:600; color:rgba(255,255,255,0.9); margin:0;">
+            {{ work.year|default:"—" }}
+          </dd>
+
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.3rem;">類型</dt>
+          <dd style="font-size:0.9rem; color:rgba(255,255,255,0.85); margin:0;">
+            {{ work.get_work_type_display|default:"—" }}
+          </dd>
+
+          {% if advisors %}
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.5rem;">指導教師</dt>
+          <dd style="margin:0;">
+            {% for link in advisors %}
+              <div class="mb-1">
+                <a href="{% url 'public_site:professor-detail' link.professor.id %}"
+                   style="color:var(--primary); text-decoration:none; font-size:0.9rem; font-weight:500;"
+                   class="hover-underline">
+                  {{ link.professor.display_name }}
+                </a>
+                {% if link.role and link.role != "primary" %}
+                  <span style="font-size:0.7rem; color:rgba(255,255,255,0.35); margin-left:0.3rem;">{{ link.get_role_display }}</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </dd>
+          {% endif %}
+
+          {% if work.language %}
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.3rem;">語言</dt>
+          <dd style="font-size:0.9rem; color:rgba(255,255,255,0.85); margin:0;">
+            {% if work.language == "zh-Hant" %}繁體中文
+            {% elif work.language == "zh-Hans" %}簡體中文
+            {% elif work.language == "en" %}English
+            {% else %}{{ work.language }}{% endif %}
+          </dd>
+          {% endif %}
+
+          {% if fields %}
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.5rem;">研究領域</dt>
+          <dd style="margin:0;">
+            <div class="d-flex flex-wrap gap-1">
+              {% for link in fields %}
+                <span class="tag" style="font-size:0.7rem; padding:0.2rem 0.6rem;">{{ link.research_field.display_name }}</span>
+              {% endfor %}
+            </div>
+          </dd>
+          {% endif %}
+
+          {% if methods %}
+          <dt style="font-size:0.75rem; color:rgba(255,255,255,0.4); text-transform:uppercase; margin-top:1.2rem; margin-bottom:0.5rem;">研究方法</dt>
+          <dd style="margin:0;">
+            <div class="d-flex flex-wrap gap-1">
+              {% for link in methods %}
+                <span class="tag tag-method" style="font-size:0.7rem; padding:0.2rem 0.6rem;">{{ link.research_method.display_name }}</span>
+              {% endfor %}
+            </div>
+          </dd>
+          {% endif %}
+        </dl>
+
+        <!-- Back button -->
+        <div class="mt-4 pt-3" style="border-top:1px solid rgba(255,255,255,0.08);">
+          <a href="{% url 'public_site:search' %}" 
+             class="btn" 
+             style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:rgba(255,255,255,0.7); font-size:0.85rem;">
+            ← 回到搜尋
+          </a>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</section>
+
 {% endblock %}
