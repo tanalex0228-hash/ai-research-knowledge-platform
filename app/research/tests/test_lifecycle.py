@@ -88,7 +88,7 @@ class ResearchWorkLifecycleTests(TestCase):
         with self.assertRaises(ValidationError):
             transition_research_work(
                 research_work=self.work,
-                to_status=ResearchWorkStatus.PUBLISHED,
+                to_status=ResearchWorkStatus.PARSED,
                 actor=self.actor,
                 reason="Skip governance",
                 request_id="request-invalid-1",

@@ -128,7 +128,7 @@ class ResearchWorkAdminObjectPermissionTests(TestCase):
         self.assertTrue(self.model_admin.has_change_permission(request, self.other_work))
         self.assertTrue(self.model_admin.has_add_permission(request))
         self.assertTrue(self.model_admin.has_delete_permission(request, self.other_work))
-        self.assertIn("transition_to_uploaded", self.model_admin.get_actions(request))
+        self.assertIn("transition_to_approved", self.model_admin.get_actions(request))
         self.assertIn(
             "status", self.model_admin.get_readonly_fields(request, self.own_work)
         )
@@ -144,13 +144,13 @@ class ResearchWorkAdminObjectPermissionTests(TestCase):
         request.session = {}
         request._messages = FallbackStorage(request)
 
-        self.model_admin.transition_to_uploaded(
+        self.model_admin.transition_to_approved(
             request,
             ResearchWork.objects.filter(pk=self.own_work.pk),
         )
 
         self.own_work.refresh_from_db()
-        self.assertEqual(self.own_work.status, ResearchWorkStatus.UPLOADED)
+        self.assertEqual(self.own_work.status, ResearchWorkStatus.APPROVED)
         transition = self.own_work.transitions.get()
         self.assertEqual(transition.actor, self.admin_user)
         self.assertEqual(transition.request_id, "middleware-transition-request-1")

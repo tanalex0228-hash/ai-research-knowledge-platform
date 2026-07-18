@@ -65,7 +65,11 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     @admin.display(description="Stored source file")
     def stored_file_reference(self, obj):
-        del obj
+        if obj and obj.file:
+            from django.urls import reverse
+            from django.utils.html import format_html
+            url = reverse("public_site:document-download", args=[obj.id])
+            return format_html('<a href="{}" target="_blank">📥 下載/檢視 PDF 檔案</a><br><span class="help">Stored privately and immutable; create a new source document to replace it.</span>', url)
         return "Stored privately and immutable; create a new source document to replace it."
 
     def get_fieldsets(self, request, obj=None):
@@ -156,6 +160,8 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             ).distinct()
         return queryset.none()
 
+
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "research_work" and not is_platform_admin(request.user):
             kwargs["queryset"] = _advised_works_for(request.user)
@@ -220,6 +226,9 @@ class SourceDocumentAdmin(admin.ModelAdmin):
                         },
                         using=database,
                     )
+            if file_changed:
+                from .services import queue_document_extraction
+                queue_document_extraction(obj)
         except Exception:
             # Storage is not transactional. Remove only a newly committed blob;
             # never delete the previous canonical file when an edit rolls back.
@@ -294,3 +303,29 @@ class DocumentChunkAdmin(admin.ModelAdmin):
                 visibility_scope__in=visible_scopes_for(request.user),
             ).distinct()
         return queryset.none()
+
+
+class SourceDocumentInline(admin.TabularInline):
+    model = SourceDocument
+    extra = 0
+    fields = ("id", "stored_file_link", "visibility_scope", "extraction_status", "uploaded_at")
+    readonly_fields = ("id", "stored_file_link", "extraction_status", "uploaded_at")
+
+    def stored_file_link(self, obj):
+        if obj and obj.file:
+            from django.urls import reverse
+            from django.utils.html import format_html
+            url = reverse("public_site:document-download", args=[obj.id])
+            return format_html('<a href="{}" target="_blank">📥 下載 PDF</a>', url)
+        return "No file"
+    stored_file_link.short_description = "檔案連結"
+
+    def has_add_permission(self, request, obj=None):
+        return is_platform_admin(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return is_platform_admin(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return is_platform_admin(request.user)
+

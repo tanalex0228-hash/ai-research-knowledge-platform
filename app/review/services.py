@@ -169,6 +169,37 @@ def decide_review_item(
             promote_value = decided_value if action == ReviewAction.EDIT else locked.candidate_value
             promote_review_item(locked, promote_value)
 
+    if resulting_state in TERMINAL_REVIEW_STATES and locked.target_type == ReviewTargetType.RESEARCH_WORK:
+        work_id = locked.target_id
+        pending_count = ReviewItem.objects.filter(
+            target_type=ReviewTargetType.RESEARCH_WORK,
+            target_id=work_id
+        ).exclude(state__in=TERMINAL_REVIEW_STATES).count()
+        if pending_count == 0:
+            from research.models import ResearchWork
+            from research.services import transition_research_work
+            try:
+                work = ResearchWork.objects.get(pk=work_id)
+                if work.status == "under_review":
+                    transition_research_work(
+                        research_work=work,
+                        to_status="approved",
+                        actor=reviewer,
+                        reason="All candidate review items resolved.",
+                        request_id=f"auto-approve-{item.id}",
+                    )
+                work.refresh_from_db()
+                if work.status == "approved":
+                    transition_research_work(
+                        research_work=work,
+                        to_status="published",
+                        actor=reviewer,
+                        reason="Auto-publishing after successful review completion.",
+                        request_id=f"auto-publish-{item.id}",
+                    )
+            except Exception:
+                pass
+
     return decision
 
 
@@ -235,6 +266,50 @@ def promote_review_item(item: ReviewItem, value: dict | str) -> None:
             abstract = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
             work.abstract = abstract
             work.save(update_fields=["abstract"])
+        elif field_path == "year":
+            work.year = int(extracted_value)
+            work.save(update_fields=["year"])
+        elif field_path == "language":
+            work.language = str(extracted_value)
+            work.save(update_fields=["language"])
+        elif field_path == "work_type":
+            work.work_type = str(extracted_value)
+            work.save(update_fields=["work_type"])
+        elif field_path == "advisors":
+            from professors.models import Professor
+            from research.models import AdvisorRole
+            work.advisor_links.all().delete()
+            names = extracted_value if isinstance(extracted_value, list) else [extracted_value]
+            for pos, name in enumerate(names, start=1):
+                try:
+                    prof = Professor.objects.get(display_name=name)
+                    WorkAdvisor.objects.update_or_create(
+                        research_work=work,
+                        professor=prof,
+                        defaults={
+                            "role": AdvisorRole.PRIMARY if pos == 1 else AdvisorRole.CO_ADVISOR,
+                            "position": pos,
+                        }
+                    )
+                except Professor.DoesNotExist:
+                    pass
+        elif field_path == "authors":
+            from research.models import Student
+            work.author_links.all().delete()
+            names = extracted_value if isinstance(extracted_value, list) else [extracted_value]
+            for pos, name in enumerate(names, start=1):
+                student, _ = Student.objects.get_or_create(
+                    display_name=name,
+                    defaults={"status": "active", "visibility_scope": "public"}
+                )
+                WorkAuthor.objects.update_or_create(
+                    research_work=work,
+                    student=student,
+                    defaults={
+                        "position": pos,
+                    }
+                )
+
 
 
 def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtractionJob:
@@ -244,6 +319,7 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
     from review.models import AIExtractionJob, ExtractionJobStatus, AIExtractionResult, ExtractionResultType, ExtractionResultStatus, ReviewItem, ReviewState
     from taxonomy.models import ResearchField, ResearchMethod
     from django.utils import timezone
+    import re
 
     # 1. Get or create a PromptVersion for metadata extraction
     prompt_version, _ = PromptVersion.objects.get_or_create(
@@ -279,14 +355,131 @@ def create_extraction_job_and_candidates(document: SourceDocument) -> AIExtracti
         started_at=timezone.now(),
     )
 
-    # 4. Scan Chunks for ResearchFields and ResearchMethods
+    # 4. Scan Chunks for Metadata and Taxonomy matches
     chunks = list(document.chunks.all().order_by("chunk_index"))
+    first_chunk_text = chunks[0].text if chunks else ""
+    all_chunks_text = " ".join([c.text for c in chunks[:3]])
+    candidates_created = 0
 
+    def add_candidate(field_path, value, result_type):
+        nonlocal candidates_created
+        if not chunks:
+            return
+        result = AIExtractionResult.objects.create(
+            job=job,
+            result_type=result_type,
+            candidate_data={"value": value},
+            confidence=1.0,
+            primary_evidence_chunk=chunks[0],
+            schema_version="1",
+            visibility_scope=document.visibility_scope,
+            status=ExtractionResultStatus.CANDIDATE,
+        )
+        ReviewItem.objects.create(
+            extraction_result=result,
+            target_type=ReviewTargetType.RESEARCH_WORK,
+            target_id=document.research_work_id,
+            field_path=field_path,
+            candidate_value={"value": value},
+            state=ReviewState.PENDING,
+            visibility_scope=document.visibility_scope,
+        )
+        candidates_created += 1
+
+    # Extract Title
+    title = ""
+    if first_chunk_text:
+        lines = [line.strip() for line in first_chunk_text.split('\n') if line.strip()]
+        stop_keywords = ["輔仁", "大學", "學系", "專題", "學年度", "指導老師", "學生", "研究計劃", "報告", "目錄", "abstract", "摘要"]
+        candidate_lines = []
+        for line in lines[:8]:
+            if not any(k in line for k in stop_keywords) and len(line) > 3:
+                candidate_lines.append(line)
+        if candidate_lines:
+            title = max(candidate_lines[:3], key=len)
+        else:
+            title = lines[0] if lines else "Untitled Research"
+    if not title:
+        title = document.research_work.title or "Untitled Research"
+    add_candidate("title", title, ExtractionResultType.SUMMARY)
+
+    # Extract Abstract
+    abstract = ""
+    for chunk in chunks[:3]:
+        match = re.search(r'(摘要|Abstract|ABSTRACT)[:：\s\n]+(.*)', chunk.text, re.DOTALL | re.IGNORECASE)
+        if match:
+            abstract_text = match.group(2).strip()
+            stop_match = re.split(r'(關鍵字|Keywords|Keywords:|1\.\s+(前言|緒論|Introduction)|目錄)', abstract_text, maxsplit=1, flags=re.IGNORECASE)
+            abstract = stop_match[0].strip()
+            if abstract:
+                break
+    if not abstract:
+        abstract = document.research_work.abstract or (first_chunk_text[:500] + "...")
+    add_candidate("abstract", abstract, ExtractionResultType.SUMMARY)
+
+    # Extract Year
+    year = timezone.now().year
+    roc_match = re.search(r'(\d{2,3})\s*(學年度|年)', all_chunks_text)
+    if roc_match:
+        y = int(roc_match.group(1))
+        if y < 1900:
+            year = y + 1911
+    else:
+        ce_match = re.search(r'\b(20\d{2})\b', all_chunks_text)
+        if ce_match:
+            year = int(ce_match.group(1))
+    add_candidate("year", year, ExtractionResultType.SUMMARY)
+
+    # Extract Language
+    has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
+    language = "zh-Hant" if has_chinese else "en"
+    add_candidate("language", language, ExtractionResultType.SUMMARY)
+
+    # Extract Work Type
+    work_type = "undergraduate_project"
+    all_chunks_text_lower = all_chunks_text.lower()
+    if "專題成果" in all_chunks_text_lower or "專題報告" in all_chunks_text_lower or "大學部" in all_chunks_text_lower:
+        work_type = "undergraduate_project"
+    elif "碩士論文" in all_chunks_text_lower or "thesis" in all_chunks_text_lower:
+        work_type = "master_thesis"
+    elif "期刊" in all_chunks_text_lower or "journal" in all_chunks_text_lower:
+        work_type = "journal_article"
+    elif "研討會" in all_chunks_text_lower or "conference" in all_chunks_text_lower:
+        work_type = "conference_paper"
+    add_candidate("work_type", work_type, ExtractionResultType.SUMMARY)
+
+    # Extract Advisors
+    from professors.models import Professor
+    advisors_found = []
+    for prof in Professor.objects.filter(status="active"):
+        if prof.display_name in all_chunks_text or (prof.normalized_name and prof.normalized_name in all_chunks_text):
+            advisors_found.append(prof.display_name)
+    if advisors_found:
+        add_candidate("advisors", advisors_found, ExtractionResultType.SUMMARY)
+
+    # Extract Authors
+    from research.models import Student
+    from accounts.models import StudentRoster
+    authors_found = []
+    for student in Student.objects.filter(status="active"):
+        if student.display_name in all_chunks_text:
+            authors_found.append(student.display_name)
+    for roster in StudentRoster.objects.all():
+        if roster.display_name in all_chunks_text and roster.display_name not in authors_found:
+            authors_found.append(roster.display_name)
+    student_matches = re.finditer(r'(學生|作者|撰寫人)[:：\s]+([\u4e00-\u9fa5]{2,4}(?:[、，\s]+[\u4e00-\u9fa5]{2,4})*)', all_chunks_text)
+    for match in student_matches:
+        names = re.split(r'[、，\s]+', match.group(2).strip())
+        for name in names:
+            if 2 <= len(name) <= 4 and name not in authors_found:
+                authors_found.append(name)
+    if authors_found:
+        add_candidate("authors", authors_found, ExtractionResultType.SUMMARY)
+
+    # Scan Chunks for ResearchFields and ResearchMethods (Taxonomy)
     from taxonomy.models import TaxonomyStatus
     fields = list(ResearchField.objects.filter(status=TaxonomyStatus.ACTIVE))
     methods = list(ResearchMethod.objects.filter(status=TaxonomyStatus.ACTIVE))
-
-    candidates_created = 0
 
     for field in fields:
         names_to_check = {field.display_name.lower(), field.slug.lower()}

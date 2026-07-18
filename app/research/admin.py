@@ -18,6 +18,7 @@ from .models import (
     WorkField,
     WorkMethod,
 )
+from documents.admin import SourceDocumentInline
 from .services import transition_research_work
 
 
@@ -125,6 +126,7 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         WorkAuthorInline,
         WorkFieldInline,
         WorkMethodInline,
+        SourceDocumentInline,
         ResearchWorkTransitionInline,
     )
     list_display = ("title", "year", "work_type", "status", "visibility_scope", "source_quality")
@@ -134,14 +136,11 @@ class ResearchWorkAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "normalized_title", "created_at", "updated_at")
     date_hierarchy = "created_at"
     actions = (
-        "transition_to_uploaded",
-        "transition_to_parsed",
-        "transition_to_ai_extracted",
-        "transition_to_under_review",
         "transition_to_approved",
         "transition_to_published",
         "transition_to_archived",
         "transition_to_rejected",
+        "restore_archived",
     )
 
     def get_queryset(self, request):
@@ -221,37 +220,25 @@ class ResearchWorkAdmin(admin.ModelAdmin):
                 level=messages.WARNING,
             )
 
-    @admin.action(description="Lifecycle: mark uploaded")
-    def transition_to_uploaded(self, request, queryset):
-        self._transition_selected(request, queryset, ResearchWorkStatus.UPLOADED)
-
-    @admin.action(description="Lifecycle: mark parsed")
-    def transition_to_parsed(self, request, queryset):
-        self._transition_selected(request, queryset, ResearchWorkStatus.PARSED)
-
-    @admin.action(description="Lifecycle: mark AI extracted")
-    def transition_to_ai_extracted(self, request, queryset):
-        self._transition_selected(request, queryset, ResearchWorkStatus.AI_EXTRACTED)
-
-    @admin.action(description="Lifecycle: send under review")
-    def transition_to_under_review(self, request, queryset):
-        self._transition_selected(request, queryset, ResearchWorkStatus.UNDER_REVIEW)
-
-    @admin.action(description="Lifecycle: approve")
+    @admin.action(description="Lifecycle: Approve")
     def transition_to_approved(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.APPROVED)
 
-    @admin.action(description="Lifecycle: publish")
+    @admin.action(description="Lifecycle: Publish")
     def transition_to_published(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
 
-    @admin.action(description="Lifecycle: archive")
+    @admin.action(description="Lifecycle: Archive")
     def transition_to_archived(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.ARCHIVED)
 
-    @admin.action(description="Lifecycle: reject")
+    @admin.action(description="Lifecycle: Reject")
     def transition_to_rejected(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.REJECTED)
+
+    @admin.action(description="Lifecycle: Restore")
+    def restore_archived(self, request, queryset):
+        self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
 
 
 @admin.register(Student)

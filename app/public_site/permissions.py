@@ -56,7 +56,17 @@ def manageable_research_works(user: "User") -> QuerySet:
 
 def visible_research_works(user: "User") -> QuerySet:
     from research.models import ResearchWork
+    from django.db.models import Q
 
+    if is_platform_admin(user):
+        return ResearchWork.objects.all()
+    if is_platform_teacher(user):
+        from professors.services import linked_professor_for_teacher
+        linked = linked_professor_for_teacher(user)
+        if linked:
+            return ResearchWork.objects.filter(
+                Q(status="published") | Q(advisor_links__professor=linked)
+            ).filter(visibility_scope__in=visible_scopes_for(user)).distinct()
     return ResearchWork.objects.discoverable_to(user)
 
 
@@ -67,8 +77,16 @@ def visible_professors(user: "User") -> QuerySet:
 
 
 def can_download_document(user: "User", document: "SourceDocument") -> bool:
+    if is_platform_admin(user):
+        return True
     work = document.research_work
+    if is_platform_teacher(user):
+        from professors.services import linked_professor_for_teacher
+        linked = linked_professor_for_teacher(user)
+        if linked and work.advisor_links.filter(professor=linked).exists():
+            return True
     if work.status != PUBLISHED_STATUS:
         return False
     scopes = set(visible_scopes_for(user))
     return document.visibility_scope in scopes and work.visibility_scope in scopes
+

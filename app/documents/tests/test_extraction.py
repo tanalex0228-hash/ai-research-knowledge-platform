@@ -105,7 +105,7 @@ class PDFExtractionTaskTests(TestCase):
 
         # Check ReviewItems
         review_items = list(ReviewItem.objects.filter(target_id=self.work.id))
-        self.assertEqual(len(review_items), 2)
+        self.assertEqual(len(review_items), 7)
         field_review = next(item for item in review_items if "fields" in item.field_path)
         self.assertEqual(field_review.candidate_value, {"slug": "esg"})
         self.assertEqual(field_review.state, ReviewState.PENDING)

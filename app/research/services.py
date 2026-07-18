@@ -21,18 +21,32 @@ from .models import (
 
 
 LEGAL_RESEARCH_WORK_TRANSITIONS = {
-    ResearchWorkStatus.DRAFT: frozenset({ResearchWorkStatus.UPLOADED}),
+    ResearchWorkStatus.DRAFT: frozenset({
+        ResearchWorkStatus.UPLOADED,
+        ResearchWorkStatus.UNDER_REVIEW,
+        ResearchWorkStatus.APPROVED,
+        ResearchWorkStatus.PUBLISHED,
+    }),
     ResearchWorkStatus.UPLOADED: frozenset({ResearchWorkStatus.PARSED}),
     ResearchWorkStatus.PARSED: frozenset({ResearchWorkStatus.AI_EXTRACTED}),
     ResearchWorkStatus.AI_EXTRACTED: frozenset({ResearchWorkStatus.UNDER_REVIEW}),
-    ResearchWorkStatus.UNDER_REVIEW: frozenset(
-        {ResearchWorkStatus.APPROVED, ResearchWorkStatus.REJECTED}
-    ),
+    ResearchWorkStatus.UNDER_REVIEW: frozenset({
+        ResearchWorkStatus.APPROVED,
+        ResearchWorkStatus.REJECTED,
+        ResearchWorkStatus.PUBLISHED,
+    }),
     ResearchWorkStatus.APPROVED: frozenset({ResearchWorkStatus.PUBLISHED}),
-    ResearchWorkStatus.PUBLISHED: frozenset(
-        {ResearchWorkStatus.UNDER_REVIEW, ResearchWorkStatus.ARCHIVED}
-    ),
+    ResearchWorkStatus.PUBLISHED: frozenset({
+        ResearchWorkStatus.UNDER_REVIEW,
+        ResearchWorkStatus.ARCHIVED,
+    }),
+    ResearchWorkStatus.ARCHIVED: frozenset({ResearchWorkStatus.PUBLISHED}),
+    ResearchWorkStatus.REJECTED: frozenset({
+        ResearchWorkStatus.UNDER_REVIEW,
+        ResearchWorkStatus.DRAFT,
+    }),
 }
+
 
 
 @transaction.atomic
@@ -168,6 +182,7 @@ def professor_field_distribution(professor, *, user=None):
         .values(
             "field_links__research_field_id",
             "field_links__research_field__display_name",
+            "field_links__research_field__slug",
         )
         .annotate(work_count=Count("id", distinct=True))
         .order_by("-work_count", "field_links__research_field__display_name")
