@@ -425,6 +425,29 @@ def create_extraction_job_and_candidates(
     field_names_found: list[str] = []
     method_names_found: list[str] = []
 
+    def split_person_names(raw_value: str) -> list[str]:
+        names: list[str] = []
+        for item in re.split(r"[、，,；;\s]+", raw_value.strip()):
+            cleaned = item.strip("：:()（）[]【】")
+            if 2 <= len(cleaned) <= 40 and cleaned not in names:
+                names.append(cleaned)
+        return names
+
+    def labeled_people(label_pattern: str) -> list[str]:
+        people: list[str] = []
+        pattern = rf"(?:^|\n)\s*{label_pattern}\s*[:：\s]+([^\n\r]{{2,120}})"
+        for match in re.finditer(pattern, all_chunks_text, flags=re.IGNORECASE):
+            raw = re.split(
+                r"(?:摘要|關鍵字|研究|目錄|Abstract|Keywords|學生|作者|指導|共同指導)",
+                match.group(1),
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+            for name in split_person_names(raw):
+                if name not in people:
+                    people.append(name)
+        return people
+
     # Extract Title
     title = ""
     title_from_document = False
@@ -474,26 +497,29 @@ def create_extraction_job_and_candidates(
                   extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
 
     # Extract Year
-    year = timezone.now().year
+    year = None
     year_from_document = False
-    roc_match = re.search(r'(\d{2,3})\s*(學年度|年)', all_chunks_text)
-    if roc_match:
+    for roc_match in re.finditer(r"(?<!\d)(\d{2,3})\s*學年度", all_chunks_text):
         y = int(roc_match.group(1))
-        if y < 1900:
+        if 80 <= y <= 150:
             year = y + 1911
             year_from_document = True
-    else:
-        ce_match = re.search(r'\b(20\d{2})\b', all_chunks_text)
-        if ce_match:
-            year = int(ce_match.group(1))
-            year_from_document = True
+            break
+    if not year_from_document:
+        for ce_match in re.finditer(r"\b(19\d{2}|20\d{2})\b", all_chunks_text):
+            candidate_year = int(ce_match.group(1))
+            if 1900 <= candidate_year <= 2100:
+                year = candidate_year
+                year_from_document = True
+                break
     extracted_summary["year"] = year if year_from_document else None
     extracted_summary["year_confidence"] = 0.85 if year_from_document else None
-    add_candidate("year", year, ExtractionResultType.SUMMARY,
-                  confidence=0.85,
-                  evidence="Matched academic year digits or CE year pattern.",
-                  source_text=all_chunks_text[:500],
-                  extraction_reason="Regex match for Academic ROC Year or CE Year format.")
+    if year_from_document:
+        add_candidate("year", year, ExtractionResultType.SUMMARY,
+                      confidence=0.85,
+                      evidence="Matched explicit academic ROC year or CE year pattern.",
+                      source_text=all_chunks_text[:500],
+                      extraction_reason="Fail-closed regex match for explicit 學年度 or CE year format.")
 
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
@@ -507,7 +533,7 @@ def create_extraction_job_and_candidates(
                   extraction_reason="Scanned text character encoding detection.")
 
     # Extract Work Type
-    work_type = "undergraduate_project"
+    work_type = None
     work_type_from_document = False
     all_chunks_text_lower = all_chunks_text.lower()
     if "專題成果" in all_chunks_text_lower or "專題報告" in all_chunks_text_lower or "大學部" in all_chunks_text_lower:
@@ -524,47 +550,30 @@ def create_extraction_job_and_candidates(
         work_type_from_document = True
     extracted_summary["work_type"] = work_type if work_type_from_document else None
     extracted_summary["work_type_confidence"] = 0.9 if work_type_from_document else None
-    add_candidate("work_type", work_type, ExtractionResultType.SUMMARY,
-                  confidence=0.9,
-                  evidence="Matched standard document type keywords (e.g. 碩士論文, 專題).",
-                  source_text=all_chunks_text[:1000],
-                  extraction_reason="Keyword lookup in initial document text.")
+    if work_type_from_document:
+        add_candidate("work_type", work_type, ExtractionResultType.SUMMARY,
+                      confidence=0.9,
+                      evidence="Matched standard document type keywords (e.g. 碩士論文, 專題).",
+                      source_text=all_chunks_text[:1000],
+                      extraction_reason="Keyword lookup in document text.")
 
     # Extract Advisors
-    from professors.models import Professor
-    advisors_found = []
-    for prof in Professor.objects.filter(status="active"):
-        if prof.display_name in all_chunks_text or (prof.normalized_name and prof.normalized_name in all_chunks_text):
-            advisors_found.append(prof.display_name)
+    advisors_found = labeled_people(r"(?<!共同)指導(?:教授|老師)")
     if advisors_found:
         add_candidate("advisors", advisors_found, ExtractionResultType.SUMMARY,
-                      confidence=0.95,
-                      evidence=f"Matched active professor names: {', '.join(advisors_found)}.",
+                      confidence=0.88,
+                      evidence=f"Matched explicit advisor label names: {', '.join(advisors_found)}.",
                       source_text=all_chunks_text,
-                      extraction_reason="Cross-referenced active professor profiles display names with document text.")
+                      extraction_reason="Extracted only from explicit 指導教授/指導老師 label blocks.")
 
     # Extract Authors
-    from research.models import Student
-    from accounts.models import UserProfile
-    authors_found = []
-    for student in Student.objects.filter(status="active"):
-        if student.display_name in all_chunks_text:
-            authors_found.append(student.display_name)
-    for profile in UserProfile.objects.exclude(display_name=""):
-        if profile.display_name in all_chunks_text and profile.display_name not in authors_found:
-            authors_found.append(profile.display_name)
-    student_matches = re.finditer(r'(學生|作者|撰寫人)[:：\s]+([\u4e00-\u9fa5]{2,4}(?:[、，\s]+[\u4e00-\u9fa5]{2,4})*)', all_chunks_text)
-    for match in student_matches:
-        names = re.split(r'[、，\s]+', match.group(2).strip())
-        for name in names:
-            if 2 <= len(name) <= 4 and name not in authors_found:
-                authors_found.append(name)
+    authors_found = labeled_people(r"(?:學生|作者|撰寫人)")
     if authors_found:
         add_candidate("authors", authors_found, ExtractionResultType.SUMMARY,
-                      confidence=0.95,
-                      evidence=f"Matched student names or roster entries: {', '.join(authors_found)}.",
+                      confidence=0.88,
+                      evidence=f"Matched explicit author/student label names: {', '.join(authors_found)}.",
                       source_text=all_chunks_text,
-                      extraction_reason="Matched against active Student and StudentRoster name index.")
+                      extraction_reason="Extracted only from explicit 學生/作者/撰寫人 label blocks.")
 
     # Scan Chunks for ResearchFields and ResearchMethods (Taxonomy)
     from taxonomy.models import TaxonomyStatus
