@@ -164,6 +164,23 @@ class PublicPageTests(PrivateStorageTestMixin, TestCase):
         self.assertContains(response, self.work.title)
         self.assertNotContains(response, self.student_work.title)
 
+    def test_field_and_method_pages_show_related_works_and_hide_private_records(self):
+        field_response = self.client.get(
+            reverse("public_site:field-detail", args=[self.field.slug])
+        )
+        method_response = self.client.get(
+            reverse("public_site:method-detail", args=[self.method.slug])
+        )
+
+        self.assertEqual(field_response.status_code, 200)
+        self.assertContains(field_response, "AI 金融")
+        self.assertContains(field_response, self.work.title)
+        self.assertNotContains(field_response, self.student_work.title)
+        self.assertEqual(method_response.status_code, 200)
+        self.assertContains(method_response, "LSTM")
+        self.assertContains(method_response, self.work.title)
+        self.assertNotContains(method_response, self.student_work.title)
+
     def test_visitor_cannot_infer_non_public_work(self):
         restricted = self.client.get(
             reverse("public_site:work-detail", args=[self.student_work.id])

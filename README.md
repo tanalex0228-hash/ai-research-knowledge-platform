@@ -1,15 +1,15 @@
 # AI Research Knowledge Platform
 
-Runnable Phase 0/1 MVP for the AI 師生研究知識平台. It is a Django 5.2 modular monolith centered on governed research entities rather than a public PDF directory.
+Runnable Phase 0/1 MVP with Phase 2 ingestion foundation and Phase 3/4 baseline APIs for the AI 師生研究知識平台. It is a Django 5.2 modular monolith centered on governed research entities rather than a public PDF directory.
 
-This delivery includes the repository foundation, RBAC-aware research catalog, Django admin, public research pages, protected PDF upload/download, keyword search, versioned read APIs, lifecycle and review governance, request tracing, migrations, tests, and deployment scaffolding. Semantic search, AI teacher matching, OCR/extraction, Graph-RAG, graph analytics, and news automation are intentionally deferred.
+This delivery includes the repository foundation, RBAC-aware research catalog, Django admin, public research pages, protected PDF upload/download, keyword search, versioned APIs, lifecycle and review governance, request tracing, OCR/page-aware ingestion foundation, review-item promotion, deterministic metadata extraction fallback, knowledge-graph synchronization, local embedding-backed semantic retrieval, floating research navigator persistence, deterministic teacher matching, migrations, tests, and deployment scaffolding. Graph-RAG answer generation, advanced graph analytics, and news automation are intentionally deferred.
 
 ## Stack
 
 - Python 3.13 and Django 5.2 LTS
 - Django Templates, Bootstrap 5, and Chart.js
 - PostgreSQL 16 with pgvector in Docker/production; SQLite for a zero-infrastructure local smoke run
-- Redis and Celery (configured; extraction tasks remain explicit Phase 2 stubs)
+- Redis and Celery for document ingestion/background processing
 - Gunicorn and Nginx deployment baseline
 
 Python 3.13 is recommended because the selected Celery 5.x line officially supports it. The Docker image and CI use the same version.
@@ -97,7 +97,7 @@ cd app
 
 Run `scripts/create_pgvector_extension.sql` as a database migration/owner account before applying the RAG migration to an existing PostgreSQL database. The local Docker database does this automatically.
 
-No external AI call is made in Phase 0/1. `AI_PROVIDER=disabled` is the safe default, and the deterministic local embedding adapter exists only for tests and interface validation.
+No external AI call is required for the local demo path. `DOCUMENT_INTELLIGENCE_PROVIDER=deterministic` and `AI_PROVIDER=disabled` are safe defaults; the deterministic metadata extractor and local embedding adapter keep the prototype testable without model credentials.
 
 ## Docker Compose
 
@@ -162,6 +162,8 @@ Public HTML:
 
 - `/` — research entry homepage
 - `/professors/` and `/professors/{id}/` — professor exploration and drill-down
+- `/fields/{slug}/` — field page with related works and professors
+- `/methods/{slug}/` — method page with related works and professors
 - `/research-works/{id}/` — published research detail
 - `/search/` — permission-filtered keyword/structured search
 - `/documents/{id}/download/` — permission-checked PDF stream
@@ -172,13 +174,20 @@ Versioned JSON API:
 - `GET /api/v1/research-works`
 - `GET /api/v1/research-works/{id}`
 - `POST /api/v1/research-works/{id}/documents` — administrator or linked teacher for an advised work
+- `POST /api/v1/ingestion-jobs` — administrator-only queue/requeue document ingestion
+- `GET /api/v1/ingestion-jobs/{id}` — administrator-only ingestion status
 - `GET /api/v1/professors`
 - `GET /api/v1/professors/{id}`
-- `POST /api/v1/search/semantic` — explicit `501` Phase 2 stub
+- `GET /api/v1/fields/{id}`
+- `GET /api/v1/methods/{id}`
+- `POST /api/v1/search/semantic` — permission-filtered semantic retrieval over available vector chunks
 - `GET /api/v1/ai/assistant/session` — current active floating Research Navigator session
 - `POST /api/v1/ai/assistant/messages` — send a page-aware navigator message
 - `POST /api/v1/ai/assistant/end` — end the current navigator session
-- `POST /api/v1/ai/teacher-matching` — explicit `501` Phase 4 stub
+- `POST /api/v1/ai/teacher-matching` — deterministic evidence-based teacher matching
+- `POST /api/v1/ai/research-navigation/sessions` — create or resume an isolated navigator session
+- `POST /api/v1/ai/research-navigation/sessions/{id}/messages` — send a message inside a specific isolated session
+- `GET /api/v1/graph/nodes/{id}/neighbors` — permission-filtered approved graph neighbors
 
 See `docs/api/openapi.yaml` for the current contract.
 
@@ -196,13 +205,16 @@ professors, fields, and methods on the server before constructing the prompt.
 It does not read PDFs, regenerate summaries, use vector search, or promote any
 AI output into approved metadata.
 
-## Known Phase 1.5 limitations
+## Known limitations
 
-- There is no student-facing login or institutional SSO route yet; student visibility is enforced and tested at the backend, but the current browser login surface is Django Admin for staff.
+- Unified `/auth/` student/teacher/admin login and StudentRoster verification are not complete in this branch; student visibility is enforced and tested at the backend, but the current browser login surface is Django Admin for staff.
 - Lifecycle transitions are available through the service and administrator actions, not a dedicated public REST transition endpoint.
 - Teachers maintain existing advised works but cannot create works, change ownership, publish, or widen visibility; administrators perform those governed actions.
 - Existing source documents cannot be promoted between visibility scopes in Phase 1.5; a reviewed document-release workflow belongs to the next governance increment.
-- PDF malware scanning, OCR, parsing, embeddings, semantic search, RAG, AI matching, and news processing remain out of scope.
+- Production-grade LLM metadata extraction depends on provider configuration. Without a provider/API key, ingestion uses the deterministic fallback and all extracted suggestions remain in Review Queue.
+- Vector chunks may exist without remote embeddings; semantic retrieval currently uses the local deterministic embedding baseline when available.
+- AI teacher matching is deterministic and evidence-bound; it does not call an LLM and does not guarantee advisor availability.
+- RAG answer generation, graph analytics/visualization, institutional SSO, and news processing remain out of scope.
 
 ## High-risk hard delete permissions
 
@@ -232,17 +244,14 @@ The Nginx example in `deploy/nginx/research-platform.conf` uses placeholders and
 
 ## Phase boundary
 
-Schemas and interfaces exist for `DocumentChunk`, vector documents/chunks, embeddings, retrieval/citations, prompt and AI request audit, AI extraction candidates, governed review decisions, and typed graph nodes/edges. Review transitions are active governance infrastructure; extraction, vector, RAG, and graph capabilities remain extension points rather than active AI features.
+Schemas and interfaces exist for `DocumentChunk`, vector documents/chunks, embeddings, retrieval/citations, prompt and AI request audit, AI extraction candidates, governed review decisions, and typed graph nodes/edges. Document ingestion, review transitions, semantic retrieval, graph neighbors, and evidence-based teacher matching now provide prototype-level baseline behavior.
 
 The following remain out of scope for this delivery:
 
-- PDF parsing, OCR, automatic chunking, embeddings, and AI extraction
-- Semantic/vector search and RAG response generation
-- AI teacher matching and research-navigation sessions
-- Graph traversal/analytics/visualization
+- Production LLM-only extraction without deterministic fallback
+- RAG response generation
+- Advanced graph analytics/visualization
 - News ingestion and research-idea generation
-
-Deferred APIs and tasks fail closed with `not implemented`; they do not silently call an LLM or retrieve unrestricted content. See `docs/architecture/phase-0-1-boundaries.md`.
 
 ## Secrets and licensing
 

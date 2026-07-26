@@ -172,6 +172,72 @@ def research_work_detail(request, work_id):
     )
 
 
+@require_GET
+def field_detail(request, slug):
+    field = get_object_or_404(ResearchField.objects.discoverable_to(request.user), slug=slug)
+    works = visible_research_works(request.user).filter(
+        field_links__research_field=field,
+        field_links__status="approved",
+    ).distinct()
+    professors = (
+        visible_professors(request.user)
+        .filter(advisor_links__research_work__in=works)
+        .annotate(work_count=Count("advisor_links__research_work", distinct=True))
+        .order_by("-work_count", "display_name")
+        .distinct()
+    )
+    methods = (
+        ResearchMethod.objects.discoverable_to(request.user)
+        .filter(work_links__research_work__in=works, work_links__status="approved")
+        .annotate(work_count=Count("work_links__research_work", distinct=True))
+        .order_by("-work_count", "display_name")
+        .distinct()
+    )
+    return render(
+        request,
+        "public_site/field_detail.html",
+        {
+            "field": field,
+            "works": works.order_by("-year", "title"),
+            "professors": professors,
+            "methods": methods,
+        },
+    )
+
+
+@require_GET
+def method_detail(request, slug):
+    method = get_object_or_404(ResearchMethod.objects.discoverable_to(request.user), slug=slug)
+    works = visible_research_works(request.user).filter(
+        method_links__research_method=method,
+        method_links__status="approved",
+    ).distinct()
+    professors = (
+        visible_professors(request.user)
+        .filter(advisor_links__research_work__in=works)
+        .annotate(work_count=Count("advisor_links__research_work", distinct=True))
+        .order_by("-work_count", "display_name")
+        .distinct()
+    )
+    fields = (
+        ResearchField.objects.discoverable_to(request.user)
+        .filter(work_links__research_work__in=works, work_links__status="approved")
+        .annotate(work_count=Count("work_links__research_work", distinct=True))
+        .order_by("-work_count", "display_name")
+        .distinct()
+    )
+    return render(
+        request,
+        "public_site/method_detail.html",
+        {
+            "method": method,
+            "works": works.order_by("-year", "title"),
+            "professors": professors,
+            "fields": fields,
+        },
+    )
+
+
 
 @require_GET
 def search(request):

@@ -1,18 +1,24 @@
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase, TestCase
+from django.test import TestCase
 from django.utils import timezone
 
 from ai.models import AIRequestLog, AIRequestPurpose, AIRequestStatus, PromptVersion
-from ai.services import TeacherMatchingNotImplemented, TeacherMatchingService
+from ai.services import TeacherMatchingService
 
 
-class TeacherMatchingBoundaryTests(SimpleTestCase):
-    def test_matching_is_explicitly_not_implemented(self):
-        with self.assertRaises(TeacherMatchingNotImplemented):
-            TeacherMatchingService().match(
-                intent="I want to study AI finance",
-                user=None,
-            )
+class TeacherMatchingBoundaryTests(TestCase):
+    def test_matching_returns_structured_empty_result_without_catalog_data(self):
+        result = TeacherMatchingService().match(
+            intent="I want to study AI finance",
+            user=None,
+        )
+
+        self.assertIn("query_id", result)
+        self.assertEqual(result["recommendations"], [])
+
+    def test_matching_rejects_empty_intent(self):
+        with self.assertRaises(ValueError):
+            TeacherMatchingService().match(intent="", user=None)
 
 
 class AIProvenanceModelTests(TestCase):
@@ -44,4 +50,3 @@ class AIProvenanceModelTests(TestCase):
 
         with self.assertRaises(ValidationError):
             request_log.full_clean()
-

@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
   title: AI Research Knowledge Platform API
-  version: 0.1.5
+  version: 0.2.0
   description: >-
-    Phase 0/1 permission-aware catalog contract with Phase 1.5 governance
-    hardening. Every response includes X-Request-ID. Successful JSON payloads
-    and JSON errors repeat that same request ID. AI endpoints remain explicit stubs.
+    Phase 0/1 permission-aware catalog contract with Phase 2 ingestion
+    foundation and Phase 3/4 baseline APIs. Every response includes
+    X-Request-ID. Successful JSON payloads and JSON errors repeat that same
+    request ID.
 servers:
   - url: /api/v1
 security:
@@ -107,6 +108,51 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
+  /ingestion-jobs:
+    post:
+      operationId: createIngestionJob
+      security:
+        - sessionAuth: []
+      summary: Queue or requeue document ingestion
+      description: Administrator-only endpoint. The job id is the SourceDocument id for the current ingestion baseline.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_document_id]
+              properties:
+                source_document_id: {type: string, format: uuid}
+      responses:
+        "201":
+          description: Source document queued for extraction
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /ingestion-jobs/{id}:
+    get:
+      operationId: getIngestionJob
+      security:
+        - sessionAuth: []
+      summary: Read ingestion status for a source document
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Source document ingestion status
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /professors:
     get:
       operationId: listProfessors
@@ -136,24 +182,130 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
-  /search/semantic:
-    post:
-      operationId: semanticSearchNotImplemented
-      summary: Semantic search placeholder
+  /fields/{id}:
+    get:
+      operationId: getResearchField
+      summary: Read a visible research field and related visible works/professors
       parameters:
+        - $ref: "#/components/parameters/Id"
         - $ref: "#/components/parameters/RequestId"
       responses:
-        "501": {$ref: "#/components/responses/NotImplemented"}
+        "200":
+          description: Research field page data
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /methods/{id}:
+    get:
+      operationId: getResearchMethod
+      summary: Read a visible research method and related visible works/professors
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Research method page data
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /search/semantic:
+    post:
+      operationId: semanticSearch
+      summary: Permission-filtered semantic retrieval over available vector chunks
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                q: {type: string}
+                query: {type: string}
+                limit: {type: integer, minimum: 1, maximum: 50}
+      responses:
+        "200":
+          description: Ranked citations from visible vector chunks
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
   /ai/teacher-matching:
     post:
-      operationId: teacherMatchingNotImplemented
-      summary: AI teacher-matching placeholder
+      operationId: teacherMatching
+      summary: Deterministic evidence-based teacher matching
       parameters:
         - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent]
+              properties:
+                intent: {type: string}
+                constraints:
+                  type: object
+                  additionalProperties: true
+                max_results: {type: integer, minimum: 1, maximum: 20}
       responses:
-        "501": {$ref: "#/components/responses/NotImplemented"}
+        "200":
+          description: Ranked professor recommendations with reasons and evidence
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /ai/research-navigation/sessions:
+    post:
+      operationId: createResearchNavigationSession
+      summary: Create or resume an isolated research navigation session
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "201":
+          description: Active session for the caller
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /ai/research-navigation/sessions/{id}/messages:
+    post:
+      operationId: createResearchNavigationMessage
+      summary: Send a message within a specific isolated navigation session
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string, maxLength: 4000}
+                page_context:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: User message and assistant reply persisted to the requested session
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
   /ai/assistant/session:
@@ -233,6 +385,21 @@ paths:
                   request_id: {type: string}
         "400": {$ref: "#/components/responses/BadRequest"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "405": {$ref: "#/components/responses/MethodNotAllowed"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /graph/nodes/{id}/neighbors:
+    get:
+      operationId: getGraphNodeNeighbors
+      summary: Read approved graph neighbors visible to the caller
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Visible active source node and approved visible neighbors
+          headers:
+            X-Request-ID: {$ref: "#/components/headers/RequestId"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/MethodNotAllowed"}
         "500": {$ref: "#/components/responses/InternalServerError"}
   /ai/assistant/end:

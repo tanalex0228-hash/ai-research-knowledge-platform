@@ -133,6 +133,25 @@ class AssistantApiTests(TestCase):
         after_end = self.client.get(reverse("api-v1:assistant-session"))
         self.assertIsNone(after_end.json()["data"]["session"])
 
+    def test_research_navigation_session_api_reuses_isolated_chat_sessions(self):
+        created = self.client.post(
+            reverse("api-v1:research-navigation-session-create"),
+            data={},
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 201)
+        session_id = created.json()["data"]["session"]["id"]
+
+        response = self.client.post(
+            reverse("api-v1:research-navigation-message", args=[session_id]),
+            data={"message": "我想做 AI 金融", "page_context": {"type": "home"}},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["data"]["session"]["id"], session_id)
+        self.assertIn("assistant_message", response.json()["data"])
+
     def test_authenticated_chat_sessions_are_isolated_by_user(self):
         self.client.force_login(self.student)
         response = self.client.post(

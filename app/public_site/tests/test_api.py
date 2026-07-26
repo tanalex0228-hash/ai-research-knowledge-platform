@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import uuid
+import json
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -11,8 +12,11 @@ from django.urls import reverse
 from accounts.models import AuditLog, Role, User, UserRole
 from documents.models import SourceDocument
 from documents.storage import private_document_storage
+from knowledge_graph.models import EdgeStatus, KnowledgeEdge, KnowledgeNode, NodeStatus
+from knowledge_graph.registry import EdgeType, NodeType
 from professors.models import Professor
-from research.models import ResearchWork, WorkAdvisor
+from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
+from taxonomy.models import ResearchField, ResearchMethod
 
 
 class ApiTests(TestCase):
@@ -51,6 +55,18 @@ class ApiTests(TestCase):
             status="published",
             visibility_scope="public",
         )
+        cls.field = ResearchField.objects.create(
+            slug="api-ai-finance",
+            display_name="AI 金融",
+            aliases=["FinTech"],
+            visibility_scope="public",
+        )
+        cls.method = ResearchMethod.objects.create(
+            slug="api-machine-learning",
+            display_name="機器學習",
+            aliases=["machine learning", "Python"],
+            visibility_scope="public",
+        )
         cls.restricted_work = ResearchWork.objects.create(
             work_type="master_thesis",
             title="限制研究 API",
@@ -60,6 +76,13 @@ class ApiTests(TestCase):
             visibility_scope="teacher",
         )
         WorkAdvisor.objects.create(research_work=cls.work, professor=cls.professor)
+        WorkField.objects.create(
+            research_work=cls.work,
+            research_field=cls.field,
+            relevance="core",
+            is_primary=True,
+        )
+        WorkMethod.objects.create(research_work=cls.work, research_method=cls.method)
         cls.admin = User.objects.create_superuser(
             username="admin",
             email="admin@example.edu",
@@ -262,19 +285,28 @@ class ApiTests(TestCase):
         self.assertEqual(response.json()["error_code"], "NOT_FOUND")
         self.assertFalse(SourceDocument.objects.exists())
 
-    def test_deferred_ai_endpoints_are_explicit_stubs(self):
-        matching = self.client.post(reverse("api-v1:teacher-matching"), data={})
-
-        self.assertEqual(matching.status_code, 501)
-        self.assertEqual(
-            matching.json()["error_code"], "TEACHER_MATCHING_NOT_IMPLEMENTED"
+    def test_teacher_matching_returns_evidence_bound_recommendations(self):
+        response = self.client.post(
+            reverse("api-v1:teacher-matching"),
+            data=json.dumps({
+                "intent": "我想做 AI 金融，不想做問卷，會 Python",
+                "constraints": {
+                    "preferred_methods": ["machine_learning"],
+                    "avoid_methods": ["survey"],
+                    "skill_signals": ["python"],
+                },
+                "max_results": 3,
+            }),
+            content_type="application/json",
         )
 
-        csrf_client = Client(enforce_csrf_checks=True)
-        self.assertEqual(
-            csrf_client.post(reverse("api-v1:teacher-matching"), data={}).status_code,
-            501,
-        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertIn("query_id", data)
+        self.assertIn("api-ai-finance", data["intent_parse"]["fields"])
+        self.assertIn("avoid_survey", data["intent_parse"]["constraints"])
+        self.assertEqual(data["recommendations"][0]["professor_id"], str(self.professor.id))
+        self.assertTrue(data["recommendations"][0]["evidence"])
 
     def test_semantic_search_endpoint(self):
         from documents.models import DocumentChunk
@@ -328,6 +360,79 @@ class ApiTests(TestCase):
         self.assertEqual(len(results), 1)
         self.assertIn("AI Finance", results[0]["excerpt"])
         self.assertEqual(results[0]["research_work"]["id"], str(self.work.id))
+
+    def test_field_method_and_graph_neighbor_apis(self):
+        work_node, _ = KnowledgeNode.objects.get_or_create(
+            node_type=NodeType.RESEARCH_WORK,
+            object_id=self.work.id,
+            defaults={
+                "label": self.work.title,
+                "visibility_scope": "public",
+                "status": NodeStatus.ACTIVE,
+            },
+        )
+        field_node, _ = KnowledgeNode.objects.get_or_create(
+            node_type=NodeType.RESEARCH_FIELD,
+            object_id=self.field.id,
+            defaults={
+                "label": self.field.display_name,
+                "visibility_scope": "public",
+                "status": NodeStatus.ACTIVE,
+            },
+        )
+        KnowledgeEdge.objects.get_or_create(
+            source=work_node,
+            target=field_node,
+            edge_type=EdgeType.BELONGS_TO_FIELD,
+            defaults={
+                "confidence": 1,
+                "evidence_note": "test",
+                "status": EdgeStatus.APPROVED,
+            },
+        )
+
+        field_response = self.client.get(reverse("api-v1:field-detail", args=[self.field.id]))
+        method_response = self.client.get(reverse("api-v1:method-detail", args=[self.method.id]))
+        graph_response = self.client.get(reverse("api-v1:graph-node-neighbors", args=[work_node.id]))
+
+        self.assertEqual(field_response.status_code, 200)
+        self.assertEqual(field_response.json()["data"]["display_name"], "AI 金融")
+        self.assertEqual(field_response.json()["data"]["research_works"][0]["id"], str(self.work.id))
+        self.assertEqual(method_response.status_code, 200)
+        self.assertEqual(method_response.json()["data"]["display_name"], "機器學習")
+        self.assertEqual(graph_response.status_code, 200)
+        neighbor_labels = {
+            item["node"]["label"] for item in graph_response.json()["data"]["neighbors"]
+        }
+        self.assertIn("AI 金融", neighbor_labels)
+
+    def test_ingestion_job_api_is_admin_only_and_queues_document(self):
+        document = SourceDocument.objects.create(
+            research_work=self.work,
+            file=SimpleUploadedFile("ingest.pdf", b"%PDF-1.4\n%%EOF", content_type="application/pdf"),
+            uploaded_by=self.admin,
+            visibility_scope="admin",
+        )
+        with patch("public_site.api_views.queue_document_extraction"):
+            denied = self.client.post(
+                reverse("api-v1:ingestion-job-create"),
+                data=json.dumps({"source_document_id": str(document.id)}),
+                content_type="application/json",
+            )
+            self.assertEqual(denied.status_code, 404)
+
+            self.client.force_login(self.admin)
+            response = self.client.post(
+                reverse("api-v1:ingestion-job-create"),
+                data=json.dumps({"source_document_id": str(document.id)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 201)
+        document.refresh_from_db()
+        self.assertEqual(document.extraction_status, "queued")
+        detail = self.client.get(reverse("api-v1:ingestion-job-detail", args=[document.id]))
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["data"]["source_document_id"], str(document.id))
 
     def test_unknown_resources_have_generic_not_found_response(self):
         response = self.client.get(

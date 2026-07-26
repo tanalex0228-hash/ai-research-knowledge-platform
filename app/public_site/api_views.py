@@ -10,7 +10,10 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 
+from accounts.permissions import VisibilityScope, visible_scopes_for
 from accounts.services import record_audit_event
+from ai.services.teacher_matching import match_teachers
+from documents.choices import ExtractionStatus
 from ai.models import (
     AssistantMessage,
     AssistantMessageRole,
@@ -18,8 +21,9 @@ from ai.models import (
     AssistantSessionStatus,
 )
 from ai.services.research_navigator import ResearchNavigatorService
-from documents.choices import VisibilityScope
 from documents.services import create_source_document, queue_document_extraction
+from documents.models import SourceDocument
+from knowledge_graph.models import EdgeStatus, KnowledgeEdge, KnowledgeNode, NodeStatus
 from professors.models import Professor
 from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
 from research.services import transition_research_work
@@ -244,6 +248,87 @@ def assistant_end(request):
     )
 
 
+@require_POST
+def research_navigation_session_create(request):
+    """Phase-4 API alias for the floating navigator session model."""
+
+    session = _active_assistant_session(request, create=True)
+    assert session is not None
+    return JsonResponse(
+        {"data": _assistant_session_payload(session), "request_id": _request_id(request)},
+        status=201,
+    )
+
+
+@require_POST
+def research_navigation_message(request, session_id):
+    session = get_object_or_404(
+        AssistantSession.objects.filter(status=AssistantSessionStatus.ACTIVE),
+        pk=session_id,
+    )
+    owner_kwargs = _assistant_owner_kwargs(request)
+    if not AssistantSession.objects.filter(pk=session.pk, **owner_kwargs).exists():
+        return _error(request, "NOT_FOUND", "Resource not found.", 404)
+
+    try:
+        body = _json_body(request)
+    except ValidationError as exc:
+        return _error(
+            request,
+            "BAD_REQUEST",
+            "Invalid JSON body.",
+            400,
+            exc.message_dict,
+        )
+    question = str(body.get("message") or body.get("question") or "").strip()
+    if not question:
+        return _error(request, "BAD_REQUEST", "Message is required.", 400)
+    page_context = body.get("page_context") or {}
+    if not isinstance(page_context, dict):
+        return _error(request, "BAD_REQUEST", "page_context must be an object.", 400)
+
+    with transaction.atomic():
+        user_message = AssistantMessage.objects.create(
+            session=session,
+            role=AssistantMessageRole.USER,
+            content=question,
+            page_context=page_context,
+        )
+        history = [
+            {"role": message.role, "content": message.content}
+            for message in session.messages.order_by("created_at", "id")
+        ]
+        result = ResearchNavigatorService().answer(
+            user=request.user,
+            question=question,
+            page_context=page_context,
+            conversation_history=history,
+        )
+        assistant_reply = AssistantMessage.objects.create(
+            session=session,
+            role=AssistantMessageRole.ASSISTANT,
+            content=result["answer"],
+            page_context=result["page_context"],
+            citations=result["citations"],
+        )
+        session.last_context = result["page_context"]
+        session.save(update_fields={"last_context", "updated_at"})
+
+    return JsonResponse(
+        {
+            "data": {
+                "session": _assistant_session_payload(session)["session"],
+                "user_message": _assistant_message_payload(user_message),
+                "assistant_message": _assistant_message_payload(assistant_reply),
+                "citations": result["citations"],
+                "page_context": result["page_context"],
+            },
+            "request_id": _request_id(request),
+        },
+        status=201,
+    )
+
+
 @require_GET
 def research_work_list(request):
     queryset = visible_research_works(request.user)
@@ -315,6 +400,58 @@ def professor_detail(request, professor_id):
     )
     return JsonResponse(
         {"data": _professor_payload(professor, request.user, works.order_by("-year", "title")), "request_id": _request_id(request)}
+    )
+
+
+@require_GET
+def field_detail(request, field_id):
+    field = get_object_or_404(ResearchField.objects.discoverable_to(request.user), pk=field_id)
+    works = visible_research_works(request.user).filter(
+        field_links__research_field=field,
+        field_links__status="approved",
+    )
+    professors = visible_professors(request.user).filter(
+        advisor_links__research_work__in=works,
+    ).distinct()
+    return JsonResponse(
+        {
+            "data": {
+                "id": str(field.id),
+                "slug": field.slug,
+                "display_name": field.display_name,
+                "description": field.description,
+                "aliases": field.aliases,
+                "research_works": [_work_payload(work) for work in works.order_by("-year", "title")[:50]],
+                "professors": [_professor_payload(professor, request.user) for professor in professors.order_by("display_name")[:50]],
+            },
+            "request_id": _request_id(request),
+        }
+    )
+
+
+@require_GET
+def method_detail(request, method_id):
+    method = get_object_or_404(ResearchMethod.objects.discoverable_to(request.user), pk=method_id)
+    works = visible_research_works(request.user).filter(
+        method_links__research_method=method,
+        method_links__status="approved",
+    )
+    professors = visible_professors(request.user).filter(
+        advisor_links__research_work__in=works,
+    ).distinct()
+    return JsonResponse(
+        {
+            "data": {
+                "id": str(method.id),
+                "slug": method.slug,
+                "display_name": method.display_name,
+                "description": method.description,
+                "aliases": method.aliases,
+                "research_works": [_work_payload(work) for work in works.order_by("-year", "title")[:50]],
+                "professors": [_professor_payload(professor, request.user) for professor in professors.order_by("display_name")[:50]],
+            },
+            "request_id": _request_id(request),
+        }
     )
 
 
@@ -390,6 +527,76 @@ def research_work_document_upload(request, work_id):
     )
 
 
+def _ingestion_document_for_user(user):
+    queryset = SourceDocument.objects.select_related("research_work")
+    if is_admin(user):
+        return queryset
+    return queryset.none()
+
+
+def _ingestion_payload(document: SourceDocument) -> dict:
+    latest_job = (
+        document.ai_extraction_jobs.order_by("-created_at")
+        .values("id", "status", "error_code", "created_at", "completed_at")
+        .first()
+    )
+    return {
+        "id": str(document.id),
+        "source_document_id": str(document.id),
+        "research_work_id": str(document.research_work_id),
+        "status": document.extraction_status,
+        "error": document.extraction_error,
+        "latest_ai_extraction_job": {
+            **latest_job,
+            "id": str(latest_job["id"]),
+            "created_at": latest_job["created_at"].isoformat(),
+            "completed_at": latest_job["completed_at"].isoformat()
+            if latest_job["completed_at"]
+            else None,
+        }
+        if latest_job
+        else None,
+    }
+
+
+@require_POST
+def ingestion_job_create(request):
+    if not is_admin(request.user):
+        return _error(request, "NOT_FOUND", "Resource not found.", 404)
+    try:
+        body = _json_body(request)
+    except ValidationError as exc:
+        return _error(request, "BAD_REQUEST", "Invalid JSON body.", 400, exc.message_dict)
+    document_id = body.get("source_document_id") or body.get("document_id")
+    if not document_id:
+        return _error(request, "BAD_REQUEST", "source_document_id is required.", 400)
+    document = get_object_or_404(_ingestion_document_for_user(request.user), pk=document_id)
+    document.extraction_status = ExtractionStatus.QUEUED
+    document.extraction_error = ""
+    document.save(update_fields={"extraction_status", "extraction_error"})
+    record_audit_event(
+        event_type="source_document.ingestion_queued",
+        actor=request.user,
+        target_type="documents.SourceDocument",
+        target_id=document.id,
+        request_id=_request_id(request),
+        metadata={"research_work_id": str(document.research_work_id)},
+    )
+    queue_document_extraction(document)
+    return JsonResponse(
+        {"data": _ingestion_payload(document), "request_id": _request_id(request)},
+        status=201,
+    )
+
+
+@require_GET
+def ingestion_job_detail(request, job_id):
+    document = get_object_or_404(_ingestion_document_for_user(request.user), pk=job_id)
+    return JsonResponse(
+        {"data": _ingestion_payload(document), "request_id": _request_id(request)}
+    )
+
+
 @csrf_exempt
 @require_POST
 def semantic_search(request):
@@ -457,9 +664,72 @@ def semantic_search(request):
 @csrf_exempt
 @require_POST
 def teacher_matching(request):
-    return _error(
-        request,
-        "TEACHER_MATCHING_NOT_IMPLEMENTED",
-        "AI teacher matching is intentionally unavailable in the Phase 0/1 MVP.",
-        501,
+    try:
+        body = _json_body(request)
+        intent = str(body.get("intent") or "").strip()
+        constraints = body.get("constraints") or {}
+        max_results = int(body.get("max_results", 5))
+        if not intent:
+            return _error(request, "BAD_REQUEST", "intent is required.", 400)
+        result = match_teachers(
+            intent=intent,
+            user=request.user,
+            constraints=constraints,
+            max_results=max_results,
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        return _error(request, "BAD_REQUEST", str(exc), 400)
+
+    return JsonResponse({"data": result, "request_id": _request_id(request)})
+
+
+@require_GET
+def graph_node_neighbors(request, node_id):
+    scopes = [str(scope) for scope in visible_scopes_for(request.user)]
+    node = get_object_or_404(
+        KnowledgeNode.objects.filter(
+            pk=node_id,
+            status=NodeStatus.ACTIVE,
+            visibility_scope__in=scopes,
+        )
+    )
+    edges = (
+        KnowledgeEdge.objects.filter(
+            Q(source=node) | Q(target=node),
+            status=EdgeStatus.APPROVED,
+            source__status=NodeStatus.ACTIVE,
+            target__status=NodeStatus.ACTIVE,
+            source__visibility_scope__in=scopes,
+            target__visibility_scope__in=scopes,
+        )
+        .select_related("source", "target")
+        .order_by("edge_type", "target__label", "source__label")[:100]
+    )
+    return JsonResponse(
+        {
+            "data": {
+                "node": {
+                    "id": str(node.id),
+                    "node_type": node.node_type,
+                    "object_id": str(node.object_id),
+                    "label": node.label,
+                },
+                "neighbors": [
+                    {
+                        "edge_id": str(edge.id),
+                        "edge_type": edge.edge_type,
+                        "direction": "outgoing" if edge.source_id == node.id else "incoming",
+                        "confidence": float(edge.confidence),
+                        "node": {
+                            "id": str(edge.target_id if edge.source_id == node.id else edge.source_id),
+                            "node_type": edge.target.node_type if edge.source_id == node.id else edge.source.node_type,
+                            "object_id": str(edge.target.object_id if edge.source_id == node.id else edge.source.object_id),
+                            "label": edge.target.label if edge.source_id == node.id else edge.source.label,
+                        },
+                    }
+                    for edge in edges
+                ],
+            },
+            "request_id": _request_id(request),
+        }
     )
