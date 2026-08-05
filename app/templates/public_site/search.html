@@ -3,9 +3,9 @@
 {% block assistant_page_type %}search{% endblock %}
 {% block assistant_search_query %}{{ query }}{% endblock %}
 {% block content %}
-<section class="page-header"><div class="container"><p class="eyebrow">Search Engine · Phase 2 & 3</p><h1>研究搜尋</h1><p>提供基於 pgvector 向量與權限過濾的 AI 語意搜尋，以及經典關鍵字搜尋與分類篩選。</p></div></section>
+<section class="page-header"><div class="container"><p class="eyebrow">研究搜尋</p><h1>研究搜尋</h1><p>輸入主題、概念或關鍵字，並搭配年度、領域與方法篩選，查看目前可見的研究成果。</p></div></section>
 <section class="container py-5"><form method="get" class="filter-panel mb-5" role="search">
-  <div class="row g-3"><div class="col-lg-5"><label for="search-query" class="form-label">題目或概念</label><input id="search-query" class="form-control" name="q" value="{{ query }}" placeholder="AI 金融、ESG、殖利率…"></div><div class="col-sm-6 col-lg"><label for="search-year" class="form-label">年度</label><input id="search-year" class="form-control" name="year" value="{{ selected_year }}" inputmode="numeric"></div><div class="col-sm-6 col-lg"><label for="search-field" class="form-label">領域</label><select id="search-field" class="form-select" name="field"><option value="">全部</option>{% for item in fields %}<option value="{{ item.slug }}" {% if selected_field == item.slug %}selected{% endif %}>{{ item.display_name }}</option>{% endfor %}</select></div><div class="col-sm-6 col-lg"><label for="search-method" class="form-label">方法</label><select id="search-method" class="form-select" name="method"><option value="">全部</option>{% for item in methods %}<option value="{{ item.slug }}" {% if selected_method == item.slug %}selected{% endif %}>{{ item.display_name }}</option>{% endfor %}</select></div><div class="col-sm-6 col-lg-2 d-flex align-items-end"><button class="btn btn-primary w-100">搜尋</button></div></div></form>
+  <div class="row g-3"><div class="col-lg-5"><label for="search-query" class="form-label">研究主題</label><input id="search-query" class="form-control" name="q" value="{{ query }}" placeholder="AI 金融、ESG、殖利率"></div><div class="col-sm-6 col-lg"><label for="search-year" class="form-label">年度</label><input id="search-year" class="form-control" name="year" value="{{ selected_year }}" inputmode="numeric"></div><div class="col-sm-6 col-lg"><label for="search-field" class="form-label">領域</label><select id="search-field" class="form-select" name="field"><option value="">全部</option>{% for item in fields %}<option value="{{ item.slug }}" {% if selected_field == item.slug %}selected{% endif %}>{{ item.display_name }}</option>{% endfor %}</select></div><div class="col-sm-6 col-lg"><label for="search-method" class="form-label">方法</label><select id="search-method" class="form-select" name="method"><option value="">全部</option>{% for item in methods %}<option value="{{ item.slug }}" {% if selected_method == item.slug %}selected{% endif %}>{{ item.display_name }}</option>{% endfor %}</select></div><div class="col-sm-6 col-lg-2 d-flex align-items-end"><button class="btn btn-primary w-100">搜尋</button></div></div></form>
 
   <p class="text-secondary">找到 {{ page_obj.paginator.count }} 筆符合的研究成果</p>
   <div class="list-group list-group-flush">
@@ -20,7 +20,7 @@
             「 ... {{ item.excerpt }} ... 」
           </div>
         {% else %}
-          <p class="mb-2 text-secondary">{{ item.work.abstract|default:"尚無摘要。"|truncatechars:180 }}</p>
+          <p class="mb-2 text-secondary">{{ item.work.abstract|default:"此研究目前未公開摘要。"|truncatechars:180 }}</p>
         {% endif %}
         <div class="d-flex justify-content-between align-items-center">
           <small class="text-secondary">{{ item.work.get_work_type_display }}</small>

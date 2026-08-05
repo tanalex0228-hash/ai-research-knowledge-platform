@@ -5,12 +5,12 @@
   <div class="container py-lg-4">
     <div class="row align-items-center g-4">
       <div class="col-lg-7">
-        <p class="eyebrow mb-2">Research Knowledge Platform</p>
-        <h1 class="display-5 fw-bold">從研究興趣出發，理解老師、題目與方法之間的關係</h1>
-        <p class="lead text-secondary mt-3">探索系所累積的研究成果，先以可信的公開資料建立研究方向；AI 導航與語意搜尋將在後續階段上線。</p>
+        <p class="eyebrow mb-2">研究知識平台</p>
+        <h1 class="display-5 fw-bold">探索研究成果，找到適合的主題與指導方向</h1>
+        <p class="lead text-secondary mt-3">整合教師研究頁、歷年研究成果、研究領域與方法，協助學生在面談前掌握脈絡，也讓訪客理解本系研究特色。</p>
         <form action="{% url 'public_site:search' %}" method="get" class="research-search mt-4" role="search">
-          <label for="home-search" class="visually-hidden">輸入研究題目或關鍵字</label>
-          <input id="home-search" class="form-control form-control-lg" name="q" placeholder="例如：AI 金融、ESG、殖利率、LSTM">
+          <label for="home-search" class="visually-hidden">搜尋研究主題</label>
+          <input id="home-search" class="form-control form-control-lg" name="q" placeholder="AI 金融、ESG、殖利率、LSTM">
           <button class="btn btn-primary btn-lg" type="submit">探索研究</button>
         </form>
       </div>
@@ -18,7 +18,7 @@
         <div class="metric-panel">
           <div><strong>{{ work_count }}</strong><span>公開研究作品</span></div>
           <div><strong>{{ professor_count }}</strong><span>公開教師頁面</span></div>
-          <div><strong>Phase 1</strong><span>目前資料目錄版本</span></div>
+          <div><strong>研究導覽</strong><span>依主題、教師與方法探索</span></div>
         </div>
       </div>
     </div>
@@ -26,7 +26,7 @@
 </section>
 
 <section class="container py-5">
-  <div class="section-heading"><div><p class="eyebrow">Research Fields</p><h2>從研究領域開始</h2></div></div>
+  <div class="section-heading"><div><p class="eyebrow">研究領域</p><h2>從研究領域開始</h2></div></div>
   <div class="row g-3">
     {% for field in fields %}
       <div class="col-sm-6 col-lg-3">
@@ -34,33 +34,33 @@
           <span>{{ field.display_name }}</span><small>{{ field.public_work_count }} 件公開作品</small>
         </a>
       </div>
-    {% empty %}<p class="text-secondary">研究領域將由管理員完成建置後顯示。</p>{% endfor %}
+    {% empty %}<p class="text-secondary">目前尚未公開研究領域。</p>{% endfor %}
   </div>
 </section>
 
 <section class="container py-5">
-  <div class="section-heading"><div><p class="eyebrow">Professors</p><h2>探索教師研究</h2></div><a href="{% url 'public_site:professor-list' %}">查看全部</a></div>
+  <div class="section-heading"><div><p class="eyebrow">教師研究</p><h2>探索教師研究</h2></div><a href="{% url 'public_site:professor-list' %}">查看全部</a></div>
   <div class="row g-4">
     {% for professor in professors %}
-      <div class="col-md-6 col-lg-4"><article class="research-card h-100"><p class="eyebrow">{{ professor.title|default:"教師" }}</p><h3 class="h5"><a href="{% url 'public_site:professor-detail' professor.id %}">{{ professor.display_name }}</a></h3><p>{{ professor.profile_summary|truncatechars:110|default:"研究資料整理中。" }}</p></article></div>
-    {% empty %}<p class="text-secondary">尚無可公開的教師資料。</p>{% endfor %}
+      <div class="col-md-6 col-lg-4"><article class="research-card h-100"><p class="eyebrow">{{ professor.title|default:"教師" }}</p><h3 class="h5"><a href="{% url 'public_site:professor-detail' professor.id %}">{{ professor.display_name }}</a></h3><p>{{ professor.profile_summary|truncatechars:110|default:"可進入教師研究頁查看已公開成果。" }}</p></article></div>
+    {% empty %}<p class="text-secondary">目前尚未公開教師研究頁。</p>{% endfor %}
   </div>
 </section>
 
 <section class="container py-5">
-  <div class="section-heading"><div><p class="eyebrow">Featured Research</p><h2>精選研究</h2></div></div>
+  <div class="section-heading"><div><p class="eyebrow">精選成果</p><h2>精選研究</h2></div></div>
   <div class="row g-4">
     {% for item in featured %}
       <div class="col-md-6 col-lg-4"><article class="research-card h-100"><span class="badge text-bg-light">{{ item.research_work.get_work_type_display }}</span><h3 class="h5 mt-3"><a href="{% url 'public_site:work-detail' item.research_work.id %}">{{ item.research_work.title }}</a></h3><p>{{ item.research_work.abstract|truncatechars:130 }}</p></article></div>
-    {% empty %}<p class="text-secondary">精選研究將由管理員設定後顯示。</p>{% endfor %}
+    {% empty %}<p class="text-secondary">目前尚未公開精選研究。</p>{% endfor %}
   </div>
 </section>
 
 <section class="container py-5">
-  <div class="section-heading"><div><p class="eyebrow">Awards</p><h2>歷年最佳專題</h2></div></div>
+  <div class="section-heading"><div><p class="eyebrow">得獎作品</p><h2>歷年最佳專題</h2></div></div>
   <div class="row g-3">
     {% for award in awards %}<div class="col-md-6"><article class="award-row"><strong>{{ award.award_year }}</strong><div><span>{{ award.name }}</span><a href="{% url 'public_site:work-detail' award.research_work.id %}">{{ award.research_work.title }}</a></div></article></div>
-    {% empty %}<p class="text-secondary">最佳專題資料整理中。</p>{% endfor %}
+    {% empty %}<p class="text-secondary">目前尚未公開歷年最佳專題。</p>{% endfor %}
   </div>
 </section>
 {% endblock %}

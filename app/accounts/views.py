@@ -80,7 +80,7 @@ def auth_entry(request):
                     request_id=request_id_for(request),
                     metadata={"identifier_present": bool(identifier), "reason": str(exc)},
                 )
-                login_form.add_error(None, "Login failed.")
+                login_form.add_error(None, "登入失敗，請確認帳號、密碼與驗證碼。")
     return render(
         request,
         "accounts/auth.html",
@@ -113,7 +113,7 @@ def student_register(request):
                 phone_number=form.cleaned_data["phone_number"],
                 request=request,
             )
-            messages.success(request, "Verification code sent to the roster email.")
+            messages.success(request, "驗證碼已寄送至名冊中的輔仁雲端信箱。")
             return redirect(f"{reverse('accounts:student-register-verify')}?registration_id={registration.id}")
         except (PermissionDenied, ValidationError) as exc:
             form.add_error(None, str(exc))
@@ -154,7 +154,7 @@ def profile(request):
             target_type="accounts.UserProfile",
             target_id=profile_obj.id,
         )
-        messages.success(request, "Profile updated.")
+        messages.success(request, "帳號資料已更新。")
         return redirect(reverse("accounts:profile"))
     return render(
         request,
@@ -181,7 +181,7 @@ def password_change(request):
             actor=user,
             request_id=request_id_for(request),
         )
-        messages.success(request, "Password changed.")
+        messages.success(request, "密碼已更新。")
         return redirect(reverse("accounts:profile"))
     return render(request, "accounts/password_change.html", {"form": form})
 
@@ -199,7 +199,7 @@ def password_reset(request):
                 request_id=request_id_for(request),
                 metadata={"email_present": True},
             )
-            messages.success(request, "If the account exists, a reset email was sent.")
+            messages.success(request, "若帳號存在，系統已寄出密碼重設信。")
             return redirect(reverse("accounts:auth-entry"))
         except PermissionDenied as exc:
             form.add_error(None, str(exc))
@@ -247,4 +247,3 @@ def latest_otp_api(request):
         })
     except StudentRegistrationOTP.DoesNotExist:
         return JsonResponse({"error": "Registration not found."}, status=404)
-

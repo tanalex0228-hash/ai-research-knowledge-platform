@@ -12,23 +12,24 @@ from .services import validate_student_email_domain
 class UnifiedLoginForm(forms.Form):
     login_type = forms.ChoiceField(
         choices=(
-            ("student", "Student"),
-            ("teacher", "Teacher"),
-            ("admin", "Admin"),
+            ("student", "學生"),
+            ("teacher", "教師"),
+            ("admin", "管理員"),
         ),
+        label="登入身分",
         required=False,
     )
-    identifier = forms.CharField(max_length=254)
-    password = forms.CharField(widget=forms.PasswordInput)
-    captcha_token = forms.CharField(max_length=512)
+    identifier = forms.CharField(label="帳號、Email 或學號", max_length=254)
+    password = forms.CharField(label="密碼", widget=forms.PasswordInput)
+    captcha_token = forms.CharField(label="驗證碼", max_length=512)
 
 
 class StudentRegistrationRequestForm(forms.Form):
-    student_id = forms.CharField(max_length=32)
-    fju_cloud_email = forms.EmailField()
-    backup_email = forms.EmailField()
-    phone_number = forms.CharField(max_length=40)
-    captcha_token = forms.CharField(max_length=512)
+    student_id = forms.CharField(label="學號", max_length=32)
+    fju_cloud_email = forms.EmailField(label="輔仁雲端信箱")
+    backup_email = forms.EmailField(label="備援信箱")
+    phone_number = forms.CharField(label="手機號碼", max_length=40)
+    captcha_token = forms.CharField(label="驗證碼", max_length=512)
 
     def clean_fju_cloud_email(self):
         email = self.cleaned_data["fju_cloud_email"]
@@ -37,11 +38,11 @@ class StudentRegistrationRequestForm(forms.Form):
 
 
 class StudentRegistrationVerifyForm(forms.Form):
-    registration_id = forms.UUIDField()
-    otp = forms.CharField(min_length=6, max_length=12)
-    new_password1 = forms.CharField(widget=forms.PasswordInput)
-    new_password2 = forms.CharField(widget=forms.PasswordInput)
-    captcha_token = forms.CharField(max_length=512)
+    registration_id = forms.UUIDField(label="註冊申請編號")
+    otp = forms.CharField(label="一次性驗證碼", min_length=6, max_length=12)
+    new_password1 = forms.CharField(label="設定密碼", widget=forms.PasswordInput)
+    new_password2 = forms.CharField(label="再次輸入密碼", widget=forms.PasswordInput)
+    captcha_token = forms.CharField(label="驗證碼", max_length=512)
 
     def clean(self):
         cleaned = super().clean()
@@ -58,6 +59,12 @@ class ProfileForm(forms.ModelForm):
     class Meta:
         model = UserProfile
         fields = ("display_name", "backup_email", "phone_number", "avatar")
+        labels = {
+            "display_name": "顯示名稱",
+            "backup_email": "備援信箱",
+            "phone_number": "手機號碼",
+            "avatar": "頭像",
+        }
 
     def clean_avatar(self):
         avatar = self.cleaned_data.get("avatar")

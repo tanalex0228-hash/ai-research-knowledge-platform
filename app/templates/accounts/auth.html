@@ -3,9 +3,9 @@
 {% block content %}
 <section class="page-header">
   <div class="container auth-panel">
-    <p class="eyebrow">Unified authentication</p>
+    <p class="eyebrow">帳號登入</p>
     <h1 class="display-6 fw-bold">登入 AI 師生研究知識平台</h1>
-    <p class="text-secondary">登入類型只是介面引導；系統會依帳號角色、名冊與權限判定可存取內容。</p>
+    <p class="text-secondary">請使用已啟用的學生、教師或管理員帳號登入；系統會依角色與名冊狀態顯示可存取內容。</p>
   </div>
 </section>
 <section class="container py-5 auth-panel">
@@ -14,11 +14,11 @@
     {% csrf_token %}
     <input type="hidden" name="intent" value="login">
     <div class="mb-3">
-      <label class="form-label" for="{{ login_form.login_type.id_for_label }}">登入類型</label>
+      <label class="form-label" for="{{ login_form.login_type.id_for_label }}">登入身分</label>
       {{ login_form.login_type }}
     </div>
     <div class="mb-3">
-      <label class="form-label" for="{{ login_form.identifier.id_for_label }}">帳號 / Email / 學號</label>
+      <label class="form-label" for="{{ login_form.identifier.id_for_label }}">帳號、Email 或學號</label>
       {{ login_form.identifier }}
     </div>
     <div class="mb-3">
@@ -26,9 +26,9 @@
       {{ login_form.password }}
     </div>
     <div class="mb-3">
-      <label class="form-label" for="{{ login_form.captcha_token.id_for_label }}">CAPTCHA token</label>
+      <label class="form-label" for="{{ login_form.captcha_token.id_for_label }}">驗證碼</label>
       {{ login_form.captcha_token }}
-      <div class="form-text">Local demo 使用 <code>test-pass</code>。</div>
+      <div class="form-text">請依頁面提供的驗證方式完成安全檢查。</div>
     </div>
     <button class="btn btn-primary" type="submit">登入</button>
     <a class="btn btn-outline-secondary" href="{% url 'accounts:password-reset' %}">忘記密碼</a>

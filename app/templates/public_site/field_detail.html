@@ -4,7 +4,7 @@
 {% block content %}
 <section class="page-header">
   <div class="container">
-    <p class="eyebrow">Research Field</p>
+    <p class="eyebrow">研究領域</p>
     <h1>{{ field.display_name }}</h1>
     {% if field.description %}<p>{{ field.description }}</p>{% endif %}
   </div>
@@ -13,7 +13,7 @@
 <section class="container py-5">
   <div class="row g-4">
     <div class="col-lg-8">
-      <div class="section-heading"><div><p class="eyebrow">Works</p><h2>相關研究成果</h2></div></div>
+      <div class="section-heading"><div><p class="eyebrow">研究成果</p><h2>相關研究成果</h2></div></div>
       <div class="list-group list-group-flush">
         {% for work in works %}
           <a class="list-group-item list-group-item-action py-4" href="{% url 'public_site:work-detail' work.id %}">
@@ -21,7 +21,7 @@
               <h3 class="h5 mb-1">{{ work.title }}</h3>
               <span>{{ work.year }}</span>
             </div>
-            <p class="mb-1 text-secondary">{{ work.abstract|default:"尚無摘要。"|truncatechars:160 }}</p>
+            <p class="mb-1 text-secondary">{{ work.abstract|default:"此研究目前未公開摘要。"|truncatechars:160 }}</p>
             <small class="text-secondary">{{ work.get_work_type_display }}</small>
           </a>
         {% empty %}

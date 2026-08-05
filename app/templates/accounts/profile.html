@@ -1,9 +1,9 @@
 {% extends "public_site/base.html" %}
-{% block title %}Profile{% endblock %}
+{% block title %}帳號資料{% endblock %}
 {% block content %}
 <section class="page-header">
   <div class="container">
-    <p class="eyebrow">Account profile</p>
+    <p class="eyebrow">帳號資料</p>
     <h1 class="display-6 fw-bold">{{ request.user.username }}</h1>
     {% for role in roles %}<span class="identity-badge me-2">{{ role }}</span>{% endfor %}
     <span class="identity-badge">{{ student_access_level }}</span>
@@ -26,7 +26,7 @@
       <form method="post" enctype="multipart/form-data" class="metadata-panel">
         {% csrf_token %}
         {{ form.as_p }}
-        <button class="btn btn-primary" type="submit">儲存 Profile</button>
+        <button class="btn btn-primary" type="submit">儲存帳號資料</button>
       </form>
     </div>
   </div>

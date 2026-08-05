@@ -14,7 +14,7 @@
 <body data-assistant-page-type="{% block assistant_page_type %}home{% endblock %}" data-assistant-object-id="{% block assistant_object_id %}{% endblock %}" data-assistant-search-query="{% block assistant_search_query %}{% endblock %}">
   <nav class="navbar navbar-expand-lg navbar-dark research-nav" aria-label="主要導覽">
     <div class="container">
-      <a class="navbar-brand fw-semibold" href="{% url 'public_site:home' %}">AI Research Knowledge</a>
+      <a class="navbar-brand fw-semibold" href="{% url 'public_site:home' %}">AI 師生研究知識平台</a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="切換導覽"><span class="navbar-toggler-icon"></span></button>
       <div class="collapse navbar-collapse" id="mainNav">
         <ul class="navbar-nav ms-auto">
@@ -43,7 +43,7 @@
   <section class="assistant-drawer" id="assistant-drawer" role="dialog" aria-modal="false" aria-label="AI 研究助理" aria-hidden="true" hidden>
     <div class="assistant-drawer__header">
       <div>
-        <p class="assistant-drawer__eyebrow">Research Navigator</p>
+        <p class="assistant-drawer__eyebrow">研究導航</p>
         <h2>AI 研究助理</h2>
       </div>
       <div class="assistant-drawer__actions">
@@ -59,13 +59,13 @@
     </div>
     <form class="assistant-form" id="assistant-form">
       <label class="visually-hidden" for="assistant-input">詢問研究助理</label>
-      <textarea id="assistant-input" rows="2" maxlength="4000" placeholder="例如：我想研究 AI 金融，可以先看哪些老師與作品？"></textarea>
+      <textarea id="assistant-input" rows="2" maxlength="4000" placeholder="我想研究 AI 金融，可以先看哪些老師與作品？"></textarea>
       <button class="btn btn-primary" type="submit">送出</button>
     </form>
   </section>
 
   <footer class="border-top mt-5 py-4 text-secondary">
-    <div class="container small">本平台的 AI 與語意檢索功能仍在分階段建置；公開內容僅來自已發布且允許公開的資料。</div>
+    <div class="container small">平台內容依使用者權限顯示；公開頁面僅呈現已發布且允許公開的研究資料。</div>
   </footer>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="{% static 'public_site/assistant.js' %}"></script>
