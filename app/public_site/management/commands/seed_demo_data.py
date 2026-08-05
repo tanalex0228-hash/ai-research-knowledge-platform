@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 
 from django.contrib.auth.models import Permission
@@ -519,13 +518,11 @@ class Command(BaseCommand):
         filename: str,
     ) -> None:
         pdf_bytes = _minimal_demo_pdf(work.title)
-        checksum = hashlib.sha256(pdf_bytes).hexdigest()
         existing = SourceDocument.objects.filter(
             research_work=work,
             original_filename=filename,
             uploaded_by=uploaded_by,
             visibility_scope=visibility_scope,
-            checksum=checksum,
         ).first()
         if existing is not None:
             if not AuditLog.objects.filter(
