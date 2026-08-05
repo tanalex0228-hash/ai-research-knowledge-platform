@@ -54,91 +54,93 @@ class DemoWork:
     work_type: str
     field_slugs: tuple[str, ...]
     method_slugs: tuple[str, ...]
+    abstract: str
 
 
 PROFESSORS = (
     DemoProfessor(
         "demo_teacher_1",
-        "林曜川（示範教師）",
-        "副教授（虛構）",
-        "Demo Lab A",
-        "專注於金融科技、資料分析與負責任的模型應用；此人物與內容皆為虛構示範資料。",
+        "林曜川",
+        "副教授",
+        "金融科技研究室",
+        "專注於金融科技、資料分析與負責任的模型應用，研究主題涵蓋信用風險、金融文字分析與智慧金融服務。",
     ),
     DemoProfessor(
         "demo_teacher_2",
-        "陳若澄（示範教師）",
-        "教授（虛構）",
-        "Demo Lab B",
-        "研究總體金融、利率風險與景氣循環；此人物與內容皆為虛構示範資料。",
+        "陳若澄",
+        "教授",
+        "總體金融研究室",
+        "研究總體金融、利率風險與景氣循環，關注殖利率曲線、通膨衝擊與企業融資決策。",
     ),
     DemoProfessor(
         "demo_teacher_3",
-        "周以衡（示範教師）",
-        "助理教授（虛構）",
-        "Demo Lab C",
-        "研究永續金融、公司治理與供應鏈韌性；此人物與內容皆為虛構示範資料。",
+        "周以衡",
+        "助理教授",
+        "永續金融研究室",
+        "研究永續金融、公司治理與供應鏈韌性，重視 ESG 資訊揭露、氣候風險與企業資金成本。",
     ),
     DemoProfessor(
         "demo_teacher_4",
-        "許安禾（示範教師）",
-        "副教授（虛構）",
-        "Demo Lab D",
-        "研究投資組合、行為金融與市場微結構；此人物與內容皆為虛構示範資料。",
+        "許安禾",
+        "副教授",
+        "投資與市場研究室",
+        "研究投資組合、行為金融與市場微結構，聚焦投資人行為、ETF 市場與多因子策略。",
     ),
     DemoProfessor(
         "demo_teacher_5",
-        "高芷岳（示範教師）",
-        "教授（虛構）",
-        "Demo Lab E",
-        "研究國際企業、數位轉型與跨境策略；此人物與內容皆為虛構示範資料。",
+        "高芷岳",
+        "教授",
+        "國際企業研究室",
+        "研究國際企業、數位轉型與跨境策略，關注供應鏈韌性、平台生態系與海外市場進入。",
     ),
 )
 
 
 FIELDS = (
-    ("demo-ai-finance", "AI 金融（示範）", ["FinTech", "金融人工智慧"]),
-    ("demo-macro-finance", "總體金融（示範）", ["景氣循環", "利率"]),
-    ("demo-sustainable-finance", "永續金融（示範）", ["ESG", "綠色金融"]),
-    ("demo-investment", "投資與市場（示範）", ["資產定價", "市場微結構"]),
-    ("demo-international-business", "國際企業（示範）", ["跨境策略", "數位轉型"]),
+    ("demo-ai-finance", "AI 金融", ["FinTech", "金融人工智慧"]),
+    ("demo-macro-finance", "總體金融", ["景氣循環", "利率"]),
+    ("demo-sustainable-finance", "永續金融", ["ESG", "綠色金融"]),
+    ("demo-investment", "投資與市場", ["資產定價", "市場微結構"]),
+    ("demo-international-business", "國際企業", ["跨境策略", "數位轉型"]),
 )
 
 
 METHODS = (
-    ("demo-machine-learning", "機器學習（示範）", ["Machine Learning", "ML"]),
-    ("demo-time-series", "時間序列（示範）", ["Time Series", "VAR"]),
-    ("demo-panel-data", "追蹤資料分析（示範）", ["Panel Data"]),
-    ("demo-event-study", "事件研究法（示範）", ["Event Study"]),
-    ("demo-case-study", "個案研究（示範）", ["Case Study"]),
+    ("demo-machine-learning", "機器學習", ["Machine Learning", "ML"]),
+    ("demo-time-series", "時間序列", ["Time Series", "VAR"]),
+    ("demo-panel-data", "追蹤資料分析", ["Panel Data"]),
+    ("demo-event-study", "事件研究法", ["Event Study"]),
+    ("demo-case-study", "個案研究", ["Case Study"]),
 )
 
 
 WORKS = (
-    DemoWork(0, "[示範] 可解釋機器學習於信用風險預警之應用", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-ai-finance",), ("demo-machine-learning",)),
-    DemoWork(0, "[示範] 開放銀行交易特徵與客戶流失預測", 2024, ResearchWorkType.MASTER_THESIS, ("demo-ai-finance",), ("demo-machine-learning", "demo-panel-data")),
-    DemoWork(0, "[示範] 金融文字情緒與市場波動的關聯", 2023, ResearchWorkType.CONFERENCE_PAPER, ("demo-ai-finance", "demo-investment"), ("demo-time-series",)),
-    DemoWork(1, "[示範] 殖利率曲線訊號與景氣循環辨識", 2025, ResearchWorkType.MASTER_THESIS, ("demo-macro-finance",), ("demo-time-series",)),
-    DemoWork(1, "[示範] 利率制度轉換下的企業融資決策", 2024, ResearchWorkType.RESEARCH_PROJECT, ("demo-macro-finance",), ("demo-time-series", "demo-panel-data")),
-    DemoWork(1, "[示範] 全球通膨衝擊與區域金融連動", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-macro-finance", "demo-international-business"), ("demo-time-series",)),
-    DemoWork(2, "[示範] 綠色債券發行與企業資金成本", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-sustainable-finance",), ("demo-panel-data",)),
-    DemoWork(2, "[示範] ESG 爭議事件對供應鏈夥伴之影響", 2024, ResearchWorkType.MASTER_THESIS, ("demo-sustainable-finance", "demo-international-business"), ("demo-event-study",)),
-    DemoWork(2, "[示範] 氣候揭露品質與投資人反應", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-sustainable-finance", "demo-investment"), ("demo-panel-data", "demo-event-study")),
-    DemoWork(3, "[示範] 注意力偏誤與散戶交易行為", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-investment",), ("demo-event-study",)),
-    DemoWork(3, "[示範] ETF 再平衡與短期價格壓力", 2024, ResearchWorkType.MASTER_THESIS, ("demo-investment",), ("demo-event-study", "demo-time-series")),
-    DemoWork(3, "[示範] 多因子投資組合的穩健性比較", 2023, ResearchWorkType.CONFERENCE_PAPER, ("demo-investment",), ("demo-panel-data",)),
-    DemoWork(4, "[示範] 中小企業跨境電商數位轉型路徑", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-international-business",), ("demo-case-study",)),
-    DemoWork(4, "[示範] 地緣風險下的供應鏈韌性策略", 2024, ResearchWorkType.RESEARCH_PROJECT, ("demo-international-business", "demo-sustainable-finance"), ("demo-case-study", "demo-panel-data")),
-    DemoWork(4, "[示範] 平台生態系治理與海外市場進入", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-international-business",), ("demo-case-study",)),
+    DemoWork(0, "可解釋機器學習於信用風險預警之應用", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-ai-finance",), ("demo-machine-learning",), "本研究以金融交易與授信特徵為基礎，探討可解釋機器學習模型在信用風險預警中的應用，並比較模型預測效果與解釋性指標。"),
+    DemoWork(0, "開放銀行交易特徵與客戶流失預測", 2024, ResearchWorkType.MASTER_THESIS, ("demo-ai-finance",), ("demo-machine-learning", "demo-panel-data"), "本研究分析開放銀行情境下的交易行為特徵，建立客戶流失預測模型，並討論資料治理與金融服務設計的實務意涵。"),
+    DemoWork(0, "金融文字情緒與市場波動的關聯", 2023, ResearchWorkType.CONFERENCE_PAPER, ("demo-ai-finance", "demo-investment"), ("demo-time-series",), "本研究利用金融新聞與市場資料，觀察文字情緒變化與市場波動之間的關聯，並評估情緒指標作為投資風險訊號的可行性。"),
+    DemoWork(1, "殖利率曲線訊號與景氣循環辨識", 2025, ResearchWorkType.MASTER_THESIS, ("demo-macro-finance",), ("demo-time-series",), "本研究以殖利率曲線與總體經濟指標為資料來源，探討不同期間利差對景氣循環辨識的訊號效果。"),
+    DemoWork(1, "利率制度轉換下的企業融資決策", 2024, ResearchWorkType.RESEARCH_PROJECT, ("demo-macro-finance",), ("demo-time-series", "demo-panel-data"), "本研究分析利率環境變化下企業融資結構的調整行為，並比較不同產業在資金成本與融資彈性上的差異。"),
+    DemoWork(1, "全球通膨衝擊與區域金融連動", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-macro-finance", "demo-international-business"), ("demo-time-series",), "本研究探討全球通膨衝擊對區域金融市場連動性的影響，並觀察利率、匯率與資本市場反應之間的動態關係。"),
+    DemoWork(2, "綠色債券發行與企業資金成本", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-sustainable-finance",), ("demo-panel-data",), "本研究檢視企業發行綠色債券後的資金成本變化，並分析永續揭露品質與市場評價之間的關係。"),
+    DemoWork(2, "ESG 爭議事件對供應鏈夥伴之影響", 2024, ResearchWorkType.MASTER_THESIS, ("demo-sustainable-finance", "demo-international-business"), ("demo-event-study",), "本研究以 ESG 爭議事件為分析對象，觀察事件對供應鏈夥伴市場評價與合作風險認知的影響。"),
+    DemoWork(2, "氣候揭露品質與投資人反應", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-sustainable-finance", "demo-investment"), ("demo-panel-data", "demo-event-study"), "本研究分析企業氣候揭露品質與投資人反應之間的關係，並討論永續資訊在資本市場中的決策價值。"),
+    DemoWork(3, "注意力偏誤與散戶交易行為", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-investment",), ("demo-event-study",), "本研究探討市場消息與投資人注意力變化對散戶交易行為的影響，並評估短期交易量與價格反應。"),
+    DemoWork(3, "ETF 再平衡與短期價格壓力", 2024, ResearchWorkType.MASTER_THESIS, ("demo-investment",), ("demo-event-study", "demo-time-series"), "本研究觀察 ETF 成分股再平衡事件對短期價格壓力與流動性的影響，並比較不同市場條件下的反應差異。"),
+    DemoWork(3, "多因子投資組合的穩健性比較", 2023, ResearchWorkType.CONFERENCE_PAPER, ("demo-investment",), ("demo-panel-data",), "本研究建構多因子投資組合並比較其穩健性，分析不同因子在市場波動期間的表現與風險控制能力。"),
+    DemoWork(4, "中小企業跨境電商數位轉型路徑", 2025, ResearchWorkType.UNDERGRADUATE_PROJECT, ("demo-international-business",), ("demo-case-study",), "本研究以中小企業跨境電商為研究對象，整理數位轉型過程中的資源配置、平台選擇與市場進入策略。"),
+    DemoWork(4, "地緣風險下的供應鏈韌性策略", 2024, ResearchWorkType.RESEARCH_PROJECT, ("demo-international-business", "demo-sustainable-finance"), ("demo-case-study", "demo-panel-data"), "本研究分析地緣風險升高時企業供應鏈調整策略，並討論多元採購、區域化配置與風險治理能力。"),
+    DemoWork(4, "平台生態系治理與海外市場進入", 2023, ResearchWorkType.JOURNAL_ARTICLE, ("demo-international-business",), ("demo-case-study",), "本研究探討平台生態系治理機制如何影響企業海外市場進入，並分析合作夥伴、資料治理與競爭策略的角色。"),
 )
 
 
 RESTRICTED_WORK = DemoWork(
     0,
-    "[示範／學生限定] 金融風險儀表板概念驗證",
+    "金融風險儀表板概念驗證",
     2025,
     ResearchWorkType.OTHER,
     ("demo-ai-finance",),
     ("demo-machine-learning",),
+    "本研究建立金融風險儀表板概念架構，整合模型監控、權限控管與決策提示，供已授權使用者檢視。",
 )
 
 
@@ -357,7 +359,7 @@ class Command(BaseCommand):
                 slug=slug,
                 defaults={
                     "display_name": display_name,
-                    "description": "純虛構的本機展示研究領域。",
+                    "description": "可供學生與訪客探索的研究領域分類。",
                     "aliases": aliases,
                     "status": TaxonomyStatus.ACTIVE,
                     "visibility_scope": VisibilityScope.PUBLIC,
@@ -373,7 +375,7 @@ class Command(BaseCommand):
                 slug=slug,
                 defaults={
                     "display_name": display_name,
-                    "description": "純虛構的本機展示研究方法。",
+                    "description": "可用於整理研究設計與分析流程的方法分類。",
                     "aliases": aliases,
                     "status": TaxonomyStatus.ACTIVE,
                     "visibility_scope": VisibilityScope.PUBLIC,
@@ -391,21 +393,26 @@ class Command(BaseCommand):
         visibility_scope: str = VisibilityScope.PUBLIC,
     ) -> ResearchWork:
         professor = professors[item.professor_index]
-        work, _ = ResearchWork.objects.update_or_create(
-            title=item.title,
+        legacy_titles = self._legacy_titles_for(item.title, visibility_scope=visibility_scope)
+        work = ResearchWork.objects.filter(
+            title__in=legacy_titles,
             year=item.year,
             work_type=item.work_type,
-            defaults={
-                "abstract": (
-                    "此為 AI 師生研究知識平台的純虛構展示成果，用於驗證目錄、權限、"
-                    "圖表與關鍵字搜尋流程，不代表任何真實論文、學生或研究結論。"
-                ),
-                "language": "zh-Hant",
-                "visibility_scope": visibility_scope,
-                "created_by": professor.user,
-                "updated_by": professor.user,
-            },
-        )
+        ).first()
+        if work is None:
+            work = ResearchWork(
+                title=item.title,
+                year=item.year,
+                work_type=item.work_type,
+            )
+        work.title = item.title
+        work.abstract = item.abstract
+        work.language = "zh-Hant"
+        work.visibility_scope = visibility_scope
+        if work.created_by_id is None:
+            work.created_by = professor.user
+        work.updated_by = professor.user
+        work.save()
         WorkAdvisor.objects.update_or_create(
             research_work=work,
             professor=professor,
@@ -435,6 +442,13 @@ class Command(BaseCommand):
         self._publish_work(work, professor.user)
         work.refresh_from_db()
         return work
+
+    @staticmethod
+    def _legacy_titles_for(title: str, *, visibility_scope: str) -> set[str]:
+        prefixes = {"[示範] "}
+        if visibility_scope != VisibilityScope.PUBLIC:
+            prefixes.add("[示範／學生限定] ")
+        return {title, *(f"{prefix}{title}" for prefix in prefixes)}
 
     @staticmethod
     def _publish_work(work: ResearchWork, actor: User) -> None:
@@ -474,29 +488,28 @@ class Command(BaseCommand):
             FeaturedWork.objects.update_or_create(
                 research_work=work,
                 defaults={
-                    "headline": f"示範精選 {index + 1}",
-                    "summary": "純虛構的首頁精選研究內容。",
+                    "headline": f"精選研究 {index + 1}",
+                    "summary": work.abstract[:180],
                     "display_order": index,
                     "is_active": True,
                     "created_by": advisor.user,
                 },
             )
         for index, work in enumerate(works[::3][:5]):
-            Award.objects.update_or_create(
-                research_work=work,
-                name="示範優秀研究獎",
-                award_year=work.year,
-                category=f"虛構組別 {index + 1}",
-                defaults={
-                    "advisor": work.advisor_links.select_related("professor").first().professor,
-                    "award_type": AwardType.BEST_PROJECT if index < 3 else AwardType.EXCELLENCE,
-                    "organization": "AI 研究平台示範評選（虛構）",
-                    "description": "僅供本機 prototype 展示，不是真實獎項。",
-                    "display_order": index,
-                    "status": AwardStatus.ACTIVE,
-                    "visibility_scope": VisibilityScope.PUBLIC,
-                },
-            )
+            award = Award.objects.filter(research_work=work, display_order=index).first()
+            if award is None:
+                award = Award(research_work=work)
+            award.name = "年度優秀研究"
+            award.award_year = work.year
+            award.category = f"研究成果組 {index + 1}"
+            award.advisor = work.advisor_links.select_related("professor").first().professor
+            award.award_type = AwardType.BEST_PROJECT if index < 3 else AwardType.EXCELLENCE
+            award.organization = "AI 師生研究知識平台"
+            award.description = "依公開測試資料建立的研究成果展示項目。"
+            award.display_order = index
+            award.status = AwardStatus.ACTIVE
+            award.visibility_scope = VisibilityScope.PUBLIC
+            award.save()
 
     @staticmethod
     def _upsert_document(
