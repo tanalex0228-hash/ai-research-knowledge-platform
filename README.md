@@ -72,6 +72,30 @@ The teacher demo accounts are `demo_teacher_1` through `demo_teacher_5`. The `de
 .venv/bin/python app/manage.py test
 ```
 
+### 固定格式學生名冊匯入
+
+`系統名單.xlsx` 的學生帳號可透過後端管理指令匯入。它只讀取 `金企二甲`、`金企二乙`、`金企三甲`、`金企三乙`、`金企四甲`、`金企四乙`，絕不讀取或修改 `教師名單`。匯入會建立 StudentRoster、User、UserProfile 與既有的 `student` 角色；不會建立 Professor、修改教師帳號或重設既有帳號密碼。
+
+先執行預演。預演會驗證固定欄位、student 身份／角色、學號與輔仁雲端信箱的一致性，以及帳號、學號、使用者名稱的唯一性，且不寫入資料庫：
+
+```bash
+python app/manage.py import_system_roster /path/to/系統名單.xlsx
+```
+
+預演成功後，才以明確的 `--apply` 建立資料。新帳號的使用者名稱為「姓名」，密碼只從 Excel 讀入並安全雜湊儲存，絕不寫入命令輸出或稽核紀錄：
+
+```bash
+python app/manage.py import_system_roster /path/to/系統名單.xlsx --apply --actor admin@example.edu.tw
+```
+
+同名學生的內部使用者名稱會自動採用其已驗證的輔仁雲端信箱；Profile 與介面仍只顯示本名。重複學號或信箱會停止整批匯入且不寫入任何資料。若管理員已確認某一列為重複／撤銷資料，可明確排除該列：
+
+```bash
+python app/manage.py import_system_roster /path/to/系統名單.xlsx --exclude-row 金企三乙!64 --apply --actor admin@example.edu.tw
+```
+
+匯入本身不授予專題上傳資格。
+
 The suite covers model constraints, lifecycle and immutable transition audits, teacher object ownership, taxonomy aliases, private PDF validation/storage, typed graph edges, deterministic embedding fallback, governed review decisions, request IDs, structured API errors, transactional upload audits, public pages, and restricted-resource non-disclosure.
 
 For an already running service:
