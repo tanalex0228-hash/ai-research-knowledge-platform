@@ -123,6 +123,18 @@ class SystemRosterImportTests(TestCase):
         self.assertTrue(user.check_password("existing-password"))
         self.assertFalse(user.check_password("new-password"))
 
+    def test_reapplying_the_same_plan_is_idempotent(self):
+        path = self._write_workbook({"金企二甲": [self._student_row()]})
+        plan = build_import_plan(path)
+
+        apply_import_plan(plan)
+        result = apply_import_plan(plan)
+
+        self.assertEqual(result["created_users"], 0)
+        self.assertEqual(result["existing_users"], 1)
+        self.assertEqual(User.objects.count(), 1)
+        self.assertEqual(StudentRoster.objects.count(), 1)
+
     def test_teacher_sheet_is_not_required_or_read(self):
         path = self._write_workbook({"金企二甲": [self._student_row()]})
 

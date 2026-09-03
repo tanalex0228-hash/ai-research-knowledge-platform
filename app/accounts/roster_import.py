@@ -231,47 +231,56 @@ def apply_import_plan(
     """
 
     effective_start = effective_start or timezone.localdate()
-    student_role = Role.objects.filter(slug="student", is_active=True).first()
-    if student_role is None:
-        raise RosterWorkbookError("The active student role does not exist")
-
     rows = plan.rows
     emails = [row.email for row in rows]
     usernames = [row.username for row in rows]
     student_ids = [row.student_id for row in rows]
-    existing_users = {
-        user.email: user
-        for user in User.objects.filter(email__in=emails).prefetch_related("roles")
-    }
-    existing_usernames = {
-        user.username.casefold(): user.email
-        for user in User.objects.filter(username__in=usernames)
-    }
-    existing_rosters = {
-        (roster.student_id, roster.fju_cloud_email): roster
-        for roster in StudentRoster.objects.filter(
-            student_id__in=student_ids,
-            fju_cloud_email__in=emails,
-            source_version=plan.source_version,
-        )
-    }
-
-    errors: list[str] = []
-    for row in rows:
-        user_with_username = existing_usernames.get(row.username.casefold())
-        if user_with_username and user_with_username != row.email:
-            errors.append(f"{row.locator}: 使用者名稱 already belongs to a different account")
-        existing_user = existing_users.get(row.email)
-        if existing_user and existing_user.username != row.username:
-            errors.append(f"{row.locator}: 帳號 already exists with a different 使用者名稱")
-        if existing_user and not existing_user.has_platform_role("student"):
-            errors.append(f"{row.locator}: 帳號 already exists without the student role")
-    if errors:
-        raise RosterWorkbookError(_format_errors(errors))
-
-    results = {"created_users": 0, "existing_users": 0, "created_rosters": 0, "updated_profiles": 0}
-    request_id = f"roster-import:{uuid4()}"
     with transaction.atomic():
+        # Lock the one system student role before reading identities.  This is a
+        # stable mutex shared by every roster import, so two operators cannot
+        # both pass preflight against the same stale account snapshot.
+        student_role = (
+            Role.objects.select_for_update().filter(slug="student", is_active=True).first()
+        )
+        if student_role is None:
+            raise RosterWorkbookError("The active student role does not exist")
+        existing_users = {
+            user.email: user
+            for user in User.objects.filter(email__in=emails).prefetch_related("roles")
+        }
+        existing_usernames = {
+            user.username.casefold(): user.email
+            for user in User.objects.filter(username__in=usernames)
+        }
+        existing_rosters = {
+            (roster.student_id, roster.fju_cloud_email): roster
+            for roster in StudentRoster.objects.filter(
+                student_id__in=student_ids,
+                fju_cloud_email__in=emails,
+                source_version=plan.source_version,
+            )
+        }
+
+        errors: list[str] = []
+        for row in rows:
+            user_with_username = existing_usernames.get(row.username.casefold())
+            if user_with_username and user_with_username != row.email:
+                errors.append(f"{row.locator}: 使用者名稱 already belongs to a different account")
+            existing_user = existing_users.get(row.email)
+            if existing_user and existing_user.username != row.username:
+                errors.append(f"{row.locator}: 帳號 already exists with a different 使用者名稱")
+            if existing_user and not existing_user.has_platform_role("student"):
+                errors.append(f"{row.locator}: 帳號 already exists without the student role")
+        if errors:
+            raise RosterWorkbookError(_format_errors(errors))
+
+        results = {
+            "created_users": 0,
+            "existing_users": 0,
+            "created_rosters": 0,
+            "updated_profiles": 0,
+        }
+        request_id = f"roster-import:{uuid4()}"
         for row in rows:
             roster = existing_rosters.get((row.student_id, row.email))
             if roster is None:
