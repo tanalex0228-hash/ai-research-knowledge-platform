@@ -283,6 +283,30 @@ class ResearchWorkAdminObjectPermissionTests(TestCase):
                     model_admin.has_change_permission(admin_request, other_object)
                 )
 
+    def test_admin_can_select_an_existing_student_user_as_work_author(self):
+        student_user = User.objects.create_user(
+            username="roster-student",
+            email="roster-student@example.test",
+        )
+        UserRole.objects.create(
+            user=student_user,
+            role=Role.objects.get(slug="student"),
+        )
+        request = self.request_for(self.admin_user)
+        form_class = self.author_admin.get_form(request)
+        form = form_class(
+            data={
+                "research_work": str(self.own_work.id),
+                "user": str(student_user.id),
+                "position": 1,
+            }
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        author = form.save()
+        self.assertEqual(author.user, student_user)
+        self.assertEqual(author.student.user, student_user)
+
     def test_teacher_cannot_access_admin_scope_or_terminal_advised_work(self):
         admin_scope = self.make_work("Admin-only advised work")
         admin_scope.visibility_scope = "admin"
