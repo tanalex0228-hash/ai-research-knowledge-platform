@@ -1,8 +1,14 @@
 from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.contrib.admin import helpers
+from django import forms
+from django.db import transaction
+from django.template.response import TemplateResponse
 
 from accounts.permissions import is_platform_admin
+from accounts.services import record_audit_event
+from public_site.request_ids import request_id_for
 from research.hard_delete import hard_delete_user
 
 from .models import AuditLog, Role, User, UserRole
@@ -13,6 +19,19 @@ class UserRoleInline(admin.TabularInline):
     fk_name = "user"
     extra = 0
     autocomplete_fields = ("role", "assigned_by")
+
+
+class GrantRolesForm(forms.Form):
+    roles = forms.ModelMultipleChoiceField(
+        label="要授予的角色／群組",
+        queryset=Role.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        help_text="只顯示目前啟用的角色；未來新增的角色會自動出現在此清單。",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["roles"].queryset = Role.objects.active().order_by("display_name", "slug")
 
 
 @admin.register(User)
@@ -28,7 +47,7 @@ class UserAdmin(DjangoUserAdmin):
     list_filter = ("is_active", "is_staff", "is_superuser")
     search_fields = ("username", "email", "first_name", "last_name")
     readonly_fields = ("id", "last_login", "date_joined")
-    actions = ("hard_delete_selected_users",)
+    actions = ("grant_selected_roles", "hard_delete_selected_users")
 
     def _can_hard_delete(self, request) -> bool:
         return is_platform_admin(request.user) and request.user.has_perm(
@@ -37,9 +56,67 @@ class UserAdmin(DjangoUserAdmin):
 
     def get_actions(self, request):
         actions = super().get_actions(request)
+        if not is_platform_admin(request.user):
+            actions.pop("grant_selected_roles", None)
         if not self._can_hard_delete(request):
             actions.pop("hard_delete_selected_users", None)
         return actions
+
+    @admin.action(description="授予角色／群組")
+    def grant_selected_roles(self, request, queryset):
+        """Grant any current active Role through a confirmation form.
+
+        This intentionally reads roles at request time: administrators do not
+        need a code change when the platform gains a new role/group.
+        """
+
+        if not is_platform_admin(request.user):
+            self.message_user(request, "您沒有授予角色的權限。", level=messages.ERROR)
+            return None
+
+        if request.POST.get("apply"):
+            form = GrantRolesForm(request.POST)
+            if form.is_valid():
+                roles = list(form.cleaned_data["roles"])
+                created_assignments = 0
+                with transaction.atomic():
+                    users = list(queryset.select_for_update())
+                    for user in users:
+                        for role in roles:
+                            _, created = UserRole.objects.get_or_create(
+                                user=user,
+                                role=role,
+                                defaults={"assigned_by": request.user},
+                            )
+                            created_assignments += int(created)
+                    record_audit_event(
+                        event_type="accounts.user_roles.granted_bulk",
+                        actor=request.user,
+                        request_id=request_id_for(request),
+                        metadata={
+                            "user_count": len(users),
+                            "role_slugs": [role.slug for role in roles],
+                            "created_assignments": created_assignments,
+                        },
+                    )
+                self.message_user(
+                    request,
+                    f"已處理 {len(users)} 位使用者，新增 {created_assignments} 筆角色指派。",
+                    level=messages.SUCCESS,
+                )
+                return None
+        else:
+            form = GrantRolesForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "授予角色／群組",
+            "opts": self.model._meta,
+            "users": queryset,
+            "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+            "form": form,
+        }
+        return TemplateResponse(request, "admin/accounts/user/grant_roles.html", context)
 
     def delete_model(self, request, obj):
         if self._can_hard_delete(request):

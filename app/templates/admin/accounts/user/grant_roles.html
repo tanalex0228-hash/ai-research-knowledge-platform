@@ -1,0 +1,30 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+  <h1>授予角色／群組</h1>
+  <p>將為下列 {{ users|length }} 位使用者新增所選角色。既有角色不會被移除。</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="grant_selected_roles">
+    {% for user in users %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ user.pk }}">
+    {% endfor %}
+
+    {{ form.non_field_errors }}
+    <fieldset class="module aligned">
+      <div class="form-row">
+        {{ form.roles.errors }}
+        {{ form.roles.label_tag }}
+        {{ form.roles }}
+        {% if form.roles.help_text %}<div class="help">{{ form.roles.help_text }}</div>{% endif %}
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" name="apply" value="確認授予" class="default">
+      <a href="{% url 'admin:accounts_user_changelist' %}" class="button cancel-link">取消</a>
+    </div>
+  </form>
+{% endblock %}

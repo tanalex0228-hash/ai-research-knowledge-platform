@@ -1,5 +1,7 @@
+from django.contrib.admin.sites import AdminSite
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 
 from accounts.models import (
     AuditLog,
@@ -12,9 +14,39 @@ from accounts.models import (
     UserRole,
 )
 from accounts.permissions import VisibilityScope, visible_scopes_for
+from accounts.admin import UserAdmin
 
 
 class RoleModelTests(TestCase):
+    def test_bulk_role_grant_uses_all_active_roles_and_writes_audit(self):
+        root = User.objects.create_superuser(
+            username="root",
+            email="root@example.test",
+            password="test-password",
+        )
+        target = User.objects.create_user(username="target", email="target@example.test")
+        future_role = Role.objects.create(slug="future-role", display_name="Future role")
+        inactive_role = Role.objects.create(
+            slug="inactive-role", display_name="Inactive role", is_active=False
+        )
+        model_admin = UserAdmin(User, AdminSite())
+        request = RequestFactory().post(
+            "/admin/accounts/user/",
+            {"apply": "1", "roles": [str(future_role.id)]},
+        )
+        request.user = root
+        request.request_id = "bulk-role-test"
+        request.session = {}
+        request._messages = FallbackStorage(request)
+
+        response = model_admin.grant_selected_roles(request, User.objects.filter(pk=target.pk))
+
+        self.assertIsNone(response)
+        self.assertTrue(target.has_platform_role("future-role"))
+        self.assertFalse(target.has_platform_role("inactive-role"))
+        event = AuditLog.objects.get(event_type="accounts.user_roles.granted_bulk")
+        self.assertEqual(event.metadata["role_slugs"], ["future-role"])
+
     def test_roster_linked_profile_gets_student_role_automatically(self):
         roster = StudentRoster.objects.create(
             student_id="414411001",
