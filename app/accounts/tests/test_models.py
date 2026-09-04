@@ -1,4 +1,5 @@
 from django.contrib.admin.sites import AdminSite
+from django.contrib.auth.models import Group
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.db import IntegrityError, transaction
 from django.test import RequestFactory, TestCase
@@ -18,34 +19,32 @@ from accounts.admin import UserAdmin
 
 
 class RoleModelTests(TestCase):
-    def test_bulk_role_grant_uses_all_active_roles_and_writes_audit(self):
+    def test_bulk_group_grant_uses_all_permission_groups_and_writes_audit(self):
         root = User.objects.create_superuser(
             username="root",
             email="root@example.test",
             password="test-password",
         )
         target = User.objects.create_user(username="target", email="target@example.test")
-        future_role = Role.objects.create(slug="future-role", display_name="Future role")
-        inactive_role = Role.objects.create(
-            slug="inactive-role", display_name="Inactive role", is_active=False
-        )
+        student_group = Group.objects.create(name="student")
+        future_group = Group.objects.create(name="future permission group")
         model_admin = UserAdmin(User, AdminSite())
         request = RequestFactory().post(
             "/admin/accounts/user/",
-            {"apply": "1", "roles": [str(future_role.id)]},
+            {"apply": "1", "groups": [str(future_group.id)]},
         )
         request.user = root
         request.request_id = "bulk-role-test"
         request.session = {}
         request._messages = FallbackStorage(request)
 
-        response = model_admin.grant_selected_roles(request, User.objects.filter(pk=target.pk))
+        response = model_admin.grant_selected_groups(request, User.objects.filter(pk=target.pk))
 
         self.assertIsNone(response)
-        self.assertTrue(target.has_platform_role("future-role"))
-        self.assertFalse(target.has_platform_role("inactive-role"))
-        event = AuditLog.objects.get(event_type="accounts.user_roles.granted_bulk")
-        self.assertEqual(event.metadata["role_slugs"], ["future-role"])
+        self.assertTrue(target.groups.filter(pk=future_group.pk).exists())
+        self.assertFalse(target.groups.filter(pk=student_group.pk).exists())
+        event = AuditLog.objects.get(event_type="accounts.user_groups.granted_bulk")
+        self.assertEqual(event.metadata["group_names"], ["future permission group"])
 
     def test_roster_linked_profile_gets_student_role_automatically(self):
         roster = StudentRoster.objects.create(

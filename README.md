@@ -98,9 +98,9 @@ python app/manage.py import_system_roster /path/to/系統名單.xlsx --exclude-r
 
 研究成果的「作者」在 Django Admin 中可直接搜尋並選擇已啟用、且具有 `student` 角色的使用者。系統會自動建立或連結該使用者的隱私保護研究作者身分；公開頁面的姓名可見性仍依研究學生設定處理。
 
-### 使用者批量授予角色／群組
+### 使用者批量授予權限群組
 
-平台管理員可在 Django Admin 的「帳號與角色 → 使用者」勾選帳號後，從「動作」選擇「授予角色／群組」。確認頁會列出所有目前啟用的角色；日後新增角色會自動出現在清單中。此操作只會新增角色、不會移除既有角色，並會寫入稽核紀錄。
+平台管理員可在 Django Admin 的「帳號與角色 → 使用者」勾選帳號後，從「動作」選擇「授予權限群組」。確認頁會列出所有目前建立的 Django 權限群組（例如 `student`、`teacher`、`USER manager(root)`）；日後新增群組會自動出現在清單中。此操作只會新增群組、不會移除既有群組，並會寫入稽核紀錄。
 
 The suite covers model constraints, lifecycle and immutable transition audits, teacher object ownership, taxonomy aliases, private PDF validation/storage, typed graph edges, deterministic embedding fallback, governed review decisions, request IDs, structured API errors, transactional upload audits, public pages, and restricted-resource non-disclosure.
 

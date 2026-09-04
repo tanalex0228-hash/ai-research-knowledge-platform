@@ -2,12 +2,12 @@
 {% load i18n %}
 
 {% block content %}
-  <h1>授予角色／群組</h1>
-  <p>將為下列 {{ users|length }} 位使用者新增所選角色。既有角色不會被移除。</p>
+  <h1>授予權限群組</h1>
+  <p>將為下列 {{ users|length }} 位使用者新增所選權限群組。既有群組不會被移除。</p>
 
   <form method="post">
     {% csrf_token %}
-    <input type="hidden" name="action" value="grant_selected_roles">
+    <input type="hidden" name="action" value="grant_selected_groups">
     {% for user in users %}
       <input type="hidden" name="{{ action_checkbox_name }}" value="{{ user.pk }}">
     {% endfor %}
@@ -15,10 +15,10 @@
     {{ form.non_field_errors }}
     <fieldset class="module aligned">
       <div class="form-row">
-        {{ form.roles.errors }}
-        {{ form.roles.label_tag }}
-        {{ form.roles }}
-        {% if form.roles.help_text %}<div class="help">{{ form.roles.help_text }}</div>{% endif %}
+        {{ form.groups.errors }}
+        {{ form.groups.label_tag }}
+        {{ form.groups }}
+        {% if form.groups.help_text %}<div class="help">{{ form.groups.help_text }}</div>{% endif %}
       </div>
     </fieldset>
 
