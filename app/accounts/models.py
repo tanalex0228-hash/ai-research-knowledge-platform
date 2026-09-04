@@ -321,6 +321,16 @@ class UserProfile(models.Model):
     def __str__(self) -> str:
         return self.display_name or self.user.get_username()
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # A profile linked to the canonical student roster is a student account.
+        # Keep the default normalized role in sync even when an administrator
+        # creates that profile outside the registration or workbook importer.
+        if self.roster_entry_id:
+            student_role = Role.objects.filter(slug="student", is_active=True).first()
+            if student_role is not None:
+                UserRole.objects.get_or_create(user=self.user, role=student_role)
+
 
 class StudentRegistrationOTP(models.Model):
     """Hashed, single-use OTP for roster-verified student registration."""

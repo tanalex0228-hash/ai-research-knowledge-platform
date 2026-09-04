@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Prefetch
 
-from accounts.permissions import visible_scopes_for
+from accounts.permissions import VisibilityScope, visible_scopes_for
 from professors.models import Professor, ProfessorStatus
 from taxonomy.models import TaxonomyStatus
 
@@ -13,6 +13,8 @@ from .models import (
     ResearchWork,
     ResearchWorkStatus,
     ResearchWorkTransition,
+    Student,
+    StudentStatus,
     WorkAdvisor,
     WorkAuthor,
     WorkField,
@@ -166,6 +168,26 @@ def work_author_names(research_work, *, user=None) -> list[str]:
         .select_related("student")
         .order_by("position")
     ]
+
+
+def ensure_research_student_for_user(account_user) -> Student:
+    """Return the privacy-preserving author identity for an active student user."""
+
+    if not account_user.is_active or not account_user.has_platform_role("student"):
+        raise ValidationError({"user": "Only active student users can be research authors."})
+
+    profile = getattr(account_user, "profile", None)
+    display_name = (getattr(profile, "display_name", "") or "").strip()
+    display_name = display_name or account_user.get_full_name().strip() or account_user.username
+    student, _ = Student.objects.get_or_create(
+        user=account_user,
+        defaults={
+            "display_name": display_name,
+            "status": StudentStatus.ACTIVE,
+            "visibility_scope": VisibilityScope.ADMIN,
+        },
+    )
+    return student
 
 
 def professor_field_distribution(professor, *, user=None):

@@ -1,4 +1,5 @@
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -87,6 +88,31 @@ class ResearchVisibilityTests(TestCase):
 
 
 class ResearchRelationshipTests(TestCase):
+    def test_student_user_author_link_creates_private_author_identity(self):
+        user = User.objects.create_user(
+            username="Roster Student",
+            email="roster-student@example.test",
+        )
+        UserRole.objects.create(user=user, role=Role.objects.get(slug="student"))
+        work = make_work("Linked authorship")
+
+        author = WorkAuthor.objects.create(research_work=work, user=user)
+
+        self.assertEqual(author.user, user)
+        self.assertEqual(author.student.user, user)
+        self.assertEqual(author.student.display_name, "Roster Student")
+        self.assertEqual(author.student.visibility_scope, VisibilityScope.ADMIN)
+
+    def test_non_student_user_cannot_become_research_author(self):
+        user = User.objects.create_user(
+            username="not-a-student",
+            email="not-a-student@example.test",
+        )
+        work = make_work("Rejected author")
+
+        with self.assertRaises(ValidationError):
+            WorkAuthor.objects.create(research_work=work, user=user)
+
     def test_duplicate_author_position_is_rejected(self):
         work = make_work("Authorship")
         first = Student.objects.create(display_name="First")

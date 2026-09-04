@@ -1,11 +1,41 @@
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from accounts.models import AuditLog, Role, User, UserRole
+from accounts.models import (
+    AuditLog,
+    EnrollmentStatus,
+    Program,
+    Role,
+    StudentRoster,
+    User,
+    UserProfile,
+    UserRole,
+)
 from accounts.permissions import VisibilityScope, visible_scopes_for
 
 
 class RoleModelTests(TestCase):
+    def test_roster_linked_profile_gets_student_role_automatically(self):
+        roster = StudentRoster.objects.create(
+            student_id="414411001",
+            fju_cloud_email="414411001@cloud.fju.edu.tw",
+            department_code="FIN",
+            program=Program.UNDERGRADUATE,
+            academic_year=2,
+            enrollment_status=EnrollmentStatus.ACTIVE,
+            effective_start="2026-09-01",
+            source="test",
+            source_version="profile-role-test",
+        )
+        user = User.objects.create_user(
+            username="roster-user",
+            email="414411001@cloud.fju.edu.tw",
+        )
+
+        UserProfile.objects.create(user=user, roster_entry=roster, display_name="Roster User")
+
+        self.assertTrue(user.has_platform_role("student"))
+
     def test_role_slug_is_normalized(self):
         role = Role.objects.create(slug="Teacher Role", display_name="Teacher")
         self.assertEqual(role.slug, "teacher-role")

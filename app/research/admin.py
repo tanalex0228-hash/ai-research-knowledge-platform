@@ -3,6 +3,7 @@ from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.utils.html import format_html
 
+from accounts.models import User
 from accounts.permissions import is_platform_admin, visible_scopes_for
 from professors.services import linked_professor_for_teacher
 from public_site.request_ids import request_id_for
@@ -67,7 +68,9 @@ class WorkAdvisorInline(admin.TabularInline):
 class WorkAuthorInline(admin.TabularInline):
     model = WorkAuthor
     extra = 0
-    autocomplete_fields = ("student",)
+    fields = ("user", "student", "position")
+    readonly_fields = ("student",)
+    autocomplete_fields = ("user",)
 
     def has_view_permission(self, request, obj=None):
         return is_platform_admin(request.user)
@@ -387,10 +390,24 @@ class ResearchWorkAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ("display_name", "is_name_public", "status", "visibility_scope")
+    list_display = ("display_name", "linked_user", "is_name_public", "status", "visibility_scope")
     list_filter = ("is_name_public", "status", "visibility_scope")
     search_fields = ("display_name", "normalized_name", "public_display_name")
+    autocomplete_fields = ("user",)
     readonly_fields = ("id", "normalized_name", "created_at", "updated_at")
+
+    @admin.display(description="學生使用者")
+    def linked_user(self, obj):
+        return obj.user or "—"
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "user":
+            kwargs["queryset"] = User.objects.filter(
+                is_active=True,
+                roles__slug="student",
+                roles__is_active=True,
+            ).distinct()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
@@ -555,10 +572,16 @@ class OwnedWorkRelationshipAdmin(admin.ModelAdmin):
 
 @admin.register(WorkAuthor)
 class WorkAuthorAdmin(OwnedWorkRelationshipAdmin):
-    list_display = ("research_work", "student", "position", "created_at")
-    search_fields = ("research_work__title", "student__display_name")
-    autocomplete_fields = ("research_work", "student")
-    readonly_fields = ("id", "created_at")
+    list_display = ("research_work", "user", "student", "position", "created_at")
+    search_fields = (
+        "research_work__title",
+        "student__display_name",
+        "user__username",
+        "user__email",
+    )
+    autocomplete_fields = ("research_work", "user")
+    fields = ("research_work", "user", "student", "position")
+    readonly_fields = ("id", "student", "created_at")
 
     def get_queryset(self, request):
         queryset = admin.ModelAdmin.get_queryset(self, request)

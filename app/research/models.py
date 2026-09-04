@@ -296,9 +296,16 @@ class StudentQuerySet(models.QuerySet):
 
 
 class Student(models.Model):
-    """Minimal author identity; no student number or personal email is stored."""
+    """Privacy-preserving author identity, optionally linked to a platform user."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="research_student_identity",
+    )
     display_name = models.CharField(max_length=160)
     normalized_name = models.CharField(max_length=160, editable=False, db_index=True)
     public_display_name = models.CharField(max_length=160, blank=True)
@@ -413,6 +420,18 @@ class WorkAuthor(models.Model):
         on_delete=models.PROTECT,
         related_name="author_links",
     )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="research_work_author_links",
+        limit_choices_to={
+            "is_active": True,
+            "roles__slug": "student",
+            "roles__is_active": True,
+        },
+    )
     position = models.PositiveSmallIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -437,6 +456,16 @@ class WorkAuthor(models.Model):
 
     def __str__(self) -> str:
         return f"{self.research_work} → {self.student}"
+
+    def save(self, *args, **kwargs):
+        if self.user_id:
+            from .services import ensure_research_student_for_user
+
+            self.student = ensure_research_student_for_user(self.user)
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"student", "user"}
+        super().save(*args, **kwargs)
 
 
 class RelationshipSource(models.TextChoices):

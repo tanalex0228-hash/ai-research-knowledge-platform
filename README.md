@@ -96,6 +96,8 @@ python app/manage.py import_system_roster /path/to/系統名單.xlsx --exclude-r
 
 匯入本身不授予專題上傳資格。
 
+研究成果的「作者」在 Django Admin 中可直接搜尋並選擇已啟用、且具有 `student` 角色的使用者。系統會自動建立或連結該使用者的隱私保護研究作者身分；公開頁面的姓名可見性仍依研究學生設定處理。
+
 The suite covers model constraints, lifecycle and immutable transition audits, teacher object ownership, taxonomy aliases, private PDF validation/storage, typed graph edges, deterministic embedding fallback, governed review decisions, request IDs, structured API errors, transactional upload audits, public pages, and restricted-resource non-disclosure.
 
 For an already running service:
