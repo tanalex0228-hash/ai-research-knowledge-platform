@@ -181,6 +181,26 @@ class PublicPageTests(PrivateStorageTestMixin, TestCase):
         self.assertContains(method_response, self.work.title)
         self.assertNotContains(method_response, self.student_work.title)
 
+    def test_field_and_method_urls_support_chinese_slugs(self):
+        chinese_field = ResearchField.objects.create(
+            slug="匯率",
+            display_name="匯率",
+        )
+        chinese_method = ResearchMethod.objects.create(
+            slug="事件研究法",
+            display_name="事件研究法",
+        )
+
+        field_response = self.client.get(
+            reverse("public_site:field-detail", args=[chinese_field.slug])
+        )
+        method_response = self.client.get(
+            reverse("public_site:method-detail", args=[chinese_method.slug])
+        )
+
+        self.assertEqual(field_response.status_code, 200)
+        self.assertEqual(method_response.status_code, 200)
+
     def test_visitor_cannot_infer_non_public_work(self):
         restricted = self.client.get(
             reverse("public_site:work-detail", args=[self.student_work.id])
