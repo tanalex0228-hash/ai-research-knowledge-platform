@@ -319,7 +319,7 @@ class Student(models.Model):
     visibility_scope = models.CharField(
         max_length=20,
         choices=VisibilityScope.choices,
-        default=VisibilityScope.ADMIN,
+        default=VisibilityScope.STUDENT,
         db_index=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)

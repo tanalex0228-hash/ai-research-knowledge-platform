@@ -61,10 +61,10 @@ class ResearchVisibilityTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             make_work("ＡＩ finance")
 
-    def test_student_name_is_private_by_default(self):
+    def test_student_name_is_visible_to_authenticated_students_by_default(self):
         student = Student.objects.create(display_name="Lin Student")
         self.assertEqual(student.display_name_for(AnonymousUser()), "Student author")
-        self.assertEqual(student.display_name_for(self.student_user), "Student author")
+        self.assertEqual(student.display_name_for(self.student_user), "Lin Student")
         admin = User.objects.create_superuser(
             username="admin",
             email="admin@example.test",
