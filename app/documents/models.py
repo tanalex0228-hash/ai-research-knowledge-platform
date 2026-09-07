@@ -50,7 +50,6 @@ class SourceDocumentQuerySet(VisibilityQuerySet):
             "file",
             "research_work",
             "research_work_id",
-            "visibility_scope",
             "uploaded_by",
             "uploaded_by_id",
         }
@@ -59,7 +58,7 @@ class SourceDocumentQuerySet(VisibilityQuerySet):
     def update(self, **kwargs):
         if self.immutable_source_fields.intersection(kwargs):
             raise ValidationError(
-                "A source document's file, research work, visibility, and uploader are immutable; "
+                "A source document's file, research work, and uploader are immutable; "
                 "create a new document."
             )
         return super().update(**kwargs)
@@ -67,7 +66,7 @@ class SourceDocumentQuerySet(VisibilityQuerySet):
     def bulk_update(self, objs, fields, batch_size=None):
         if self.immutable_source_fields.intersection(fields):
             raise ValidationError(
-                "A source document's file, research work, visibility, and uploader are immutable; "
+                "A source document's file, research work, and uploader are immutable; "
                 "create a new document."
             )
         return super().bulk_update(objs, fields, batch_size=batch_size)
@@ -194,16 +193,15 @@ class SourceDocument(models.Model):
     def save(self, *args, **kwargs):
         if self.pk and not self._state.adding:
             persisted = type(self)._base_manager.only(
-                "research_work_id", "file", "visibility_scope", "uploaded_by_id"
+                "research_work_id", "file", "uploaded_by_id"
             ).get(pk=self.pk)
             if (
                 persisted.research_work_id != self.research_work_id
                 or persisted.file.name != self.file.name
-                or persisted.visibility_scope != self.visibility_scope
                 or persisted.uploaded_by_id != self.uploaded_by_id
             ):
                 raise ValidationError(
-                    "A source document's file, research work, visibility, and uploader "
+                    "A source document's file, research work, and uploader "
                     "are immutable; "
                     "create a new document instead."
                 )

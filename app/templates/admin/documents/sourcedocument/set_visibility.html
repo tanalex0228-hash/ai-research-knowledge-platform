@@ -1,0 +1,30 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>批量設定原始文件可見性</h1>
+  <p>將變更下列 {{ documents|length }} 份原始文件的 PDF 下載／預覽權限。這不會修改研究成果可見性、檔案內容、文件段落或擷取結果。</p>
+  <p>研究成果可見性仍是整篇內容的總開關：研究成果可公開而文件設為管理員時，只會開放摘要與 metadata；研究成果設為管理員時，整篇研究會對非管理員隱藏。</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="set_selected_visibility">
+    {% for document in documents %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ document.pk }}">
+    {% endfor %}
+
+    {{ form.non_field_errors }}
+    <fieldset class="module aligned">
+      <div class="form-row">
+        {{ form.visibility_scope.errors }}
+        {{ form.visibility_scope.label_tag }}
+        {{ form.visibility_scope }}
+        {% if form.visibility_scope.help_text %}<div class="help">{{ form.visibility_scope.help_text }}</div>{% endif %}
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" name="apply" value="確認更新" class="default">
+      <a href="{% url 'admin:documents_sourcedocument_changelist' %}" class="button cancel-link">取消</a>
+    </div>
+  </form>
+{% endblock %}

@@ -168,6 +168,7 @@ class SourceDocumentAdminPermissionTests(TestCase):
             if value
         }
         self.assertEqual(scope_values, {"teacher"})
+        self.assertNotIn("set_selected_visibility", self.model_admin.get_actions(request))
 
     def test_teacher_cannot_save_document_for_unadvised_work(self):
         request = self.request_for(self.teacher)
@@ -282,6 +283,70 @@ class SourceDocumentAdminPermissionTests(TestCase):
         self.assertContains(response, "檔案採私有儲存且不可直接覆蓋")
         self.assertNotContains(response, 'input type="file"')
         self.assertNotContains(response, 'name="research_work"')
+
+    def test_platform_admin_can_change_a_document_visibility_without_replacing_file(self):
+        self.client.force_login(self.platform_admin)
+
+        response = self.client.post(
+            f"/admin/documents/sourcedocument/{self.teacher_document.id}/change/",
+            {"visibility_scope": "admin", "_save": "Save"},
+            HTTP_X_REQUEST_ID="document-visibility-trace-123",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.teacher_document.refresh_from_db()
+        self.assertEqual(self.teacher_document.visibility_scope, "admin")
+        audit = AuditLog.objects.get(
+            event_type="source_document.visibility_changed",
+            target_id=self.teacher_document.id,
+        )
+        self.assertEqual(audit.actor, self.platform_admin)
+        self.assertEqual(audit.request_id, "document-visibility-trace-123")
+        self.assertEqual(audit.metadata["from_visibility_scope"], "teacher")
+        self.assertEqual(audit.metadata["to_visibility_scope"], "admin")
+
+    def test_platform_admin_can_bulk_change_document_visibility(self):
+        self.client.force_login(self.platform_admin)
+        url = "/admin/documents/sourcedocument/"
+
+        confirmation = self.client.post(
+            url,
+            {
+                "action": "set_selected_visibility",
+                "_selected_action": [
+                    str(self.teacher_document.id),
+                    str(self.other_document.id),
+                ],
+            },
+        )
+        self.assertEqual(confirmation.status_code, 200)
+        self.assertContains(confirmation, "批量設定原始文件可見性")
+
+        response = self.client.post(
+            url,
+            {
+                "action": "set_selected_visibility",
+                "apply": "確認更新",
+                "visibility_scope": "admin",
+                "_selected_action": [
+                    str(self.teacher_document.id),
+                    str(self.other_document.id),
+                ],
+            },
+            HTTP_X_REQUEST_ID="document-bulk-visibility-trace-456",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.teacher_document.refresh_from_db()
+        self.other_document.refresh_from_db()
+        self.assertEqual(self.teacher_document.visibility_scope, "admin")
+        self.assertEqual(self.other_document.visibility_scope, "admin")
+        audit = AuditLog.objects.get(
+            event_type="source_documents.visibility_changed_bulk",
+            request_id="document-bulk-visibility-trace-456",
+        )
+        self.assertEqual(audit.actor, self.platform_admin)
+        self.assertEqual(audit.metadata["document_count"], 2)
+        self.assertEqual(audit.metadata["changed_count"], 2)
 
     def test_admin_audit_failure_rolls_back_row_and_removes_blob(self):
         request = self.request_for(self.platform_admin)

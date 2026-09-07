@@ -144,7 +144,7 @@ class SourceDocumentPersistenceTests(TestCase):
         with self.assertRaises(PrivateDocumentURLUnavailable):
             _ = document.file.url
 
-    def test_saved_file_and_parent_work_are_immutable(self):
+    def test_saved_file_and_parent_work_are_immutable_but_visibility_is_administrable(self):
         first_work = ResearchWork.objects.create(
             work_type=ResearchWork.WorkType.UNDERGRADUATE_PROJECT,
             title="Immutable source fixture",
@@ -189,8 +189,23 @@ class SourceDocumentPersistenceTests(TestCase):
 
         document.refresh_from_db()
         document.visibility_scope = VisibilityScope.PUBLIC
-        with self.assertRaisesMessage(ValidationError, "immutable"):
-            document.save(update_fields={"visibility_scope"})
+        document.save(update_fields={"visibility_scope"})
+        document.refresh_from_db()
+        self.assertEqual(document.visibility_scope, VisibilityScope.PUBLIC)
+
+        self.assertEqual(
+            SourceDocument.objects.filter(pk=document.pk).update(
+                visibility_scope=VisibilityScope.ADMIN
+            ),
+            1,
+        )
+        document.refresh_from_db()
+        self.assertEqual(document.visibility_scope, VisibilityScope.ADMIN)
+
+        document.visibility_scope = VisibilityScope.STUDENT
+        SourceDocument.objects.bulk_update([document], ["visibility_scope"])
+        document.refresh_from_db()
+        self.assertEqual(document.visibility_scope, VisibilityScope.STUDENT)
 
     def test_committed_row_or_cascade_deletion_removes_private_blob(self):
         for delete_parent in (False, True):

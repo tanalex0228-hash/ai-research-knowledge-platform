@@ -1,7 +1,10 @@
 from django.contrib import admin
 from django.contrib import messages
+from django import forms
+from django.contrib.admin import helpers
 from django.core.exceptions import PermissionDenied
 from django.db import router, transaction
+from django.template.response import TemplateResponse
 
 from accounts.permissions import (
     is_platform_admin,
@@ -16,6 +19,17 @@ from research.models import ResearchWork
 from .choices import VisibilityScope
 from .forms import DocumentChunkAdminForm, SourceDocumentUploadForm
 from .models import DocumentChunk, SourceDocument
+
+
+class SourceDocumentVisibilityForm(forms.Form):
+    visibility_scope = forms.ChoiceField(
+        label="文件可見性範圍",
+        choices=VisibilityScope.choices,
+        help_text=(
+            "只會變更選取原始文件的下載／預覽權限；不會修改研究成果、"
+            "檔案內容、文件段落或擷取結果。"
+        ),
+    )
 
 
 def _advised_works_for(user):
@@ -52,7 +66,10 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         "checksum",
     )
     raw_id_fields = ("research_work", "uploaded_by")
-    actions = ("hard_delete_selected_source_documents",)
+    actions = (
+        "set_selected_visibility",
+        "hard_delete_selected_source_documents",
+    )
     readonly_fields = (
         "id",
         "stored_file_reference",
@@ -147,6 +164,8 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     def get_actions(self, request):
         actions = super().get_actions(request)
+        if not is_platform_admin(request.user):
+            actions.pop("set_selected_visibility", None)
         if not self._can_hard_delete(request):
             actions.pop("hard_delete_selected_source_documents", None)
         return actions
@@ -215,7 +234,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         fields = tuple(super().get_readonly_fields(request, obj)) + ("uploaded_by",)
         if obj is not None:
-            fields += ("research_work", "stored_file_reference", "visibility_scope")
+            fields += ("research_work", "stored_file_reference")
         return tuple(dict.fromkeys(fields))
 
     def save_model(self, request, obj, form, change):
@@ -234,13 +253,15 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             form is not None and "file" in getattr(form, "changed_data", ())
         )
         old_file_name = ""
+        old_visibility_scope = None
         if change and obj.pk:
-            old_file_name = (
+            previous = (
                 SourceDocument.objects.filter(pk=obj.pk)
-                .values_list("file", flat=True)
+                .values("file", "visibility_scope")
                 .first()
-                or ""
             )
+            old_file_name = (previous or {}).get("file", "")
+            old_visibility_scope = (previous or {}).get("visibility_scope")
 
         database = router.db_for_write(SourceDocument, instance=obj)
         try:
@@ -260,6 +281,21 @@ class SourceDocumentAdmin(admin.ModelAdmin):
                         },
                         using=database,
                     )
+                elif old_visibility_scope != obj.visibility_scope:
+                    record_audit_event(
+                        event_type="source_document.visibility_changed",
+                        actor=request.user,
+                        target_type="documents.SourceDocument",
+                        target_id=obj.id,
+                        request_id=request_id_for(request),
+                        metadata={
+                            "research_work_id": str(obj.research_work_id),
+                            "from_visibility_scope": old_visibility_scope,
+                            "to_visibility_scope": obj.visibility_scope,
+                            "source": "django_admin",
+                        },
+                        using=database,
+                    )
             if file_changed:
                 from .services import queue_document_extraction
                 queue_document_extraction(obj)
@@ -275,6 +311,59 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             ):
                 obj.file.storage.delete(new_file_name)
             raise
+
+    @admin.action(description="批量設定原始文件可見性範圍")
+    def set_selected_visibility(self, request, queryset):
+        if not is_platform_admin(request.user):
+            self.message_user(request, "您沒有批量設定文件可見性的權限。", messages.ERROR)
+            return None
+
+        if request.POST.get("apply"):
+            form = SourceDocumentVisibilityForm(request.POST)
+            if form.is_valid():
+                visibility_scope = form.cleaned_data["visibility_scope"]
+                database = router.db_for_write(SourceDocument)
+                with transaction.atomic(using=database):
+                    documents = list(queryset.select_for_update())
+                    changed = 0
+                    for document in documents:
+                        if document.visibility_scope != visibility_scope:
+                            document.visibility_scope = visibility_scope
+                            document.save(update_fields=("visibility_scope", "updated_at"))
+                            changed += 1
+                    record_audit_event(
+                        event_type="source_documents.visibility_changed_bulk",
+                        actor=request.user,
+                        request_id=request_id_for(request),
+                        metadata={
+                            "document_count": len(documents),
+                            "changed_count": changed,
+                            "visibility_scope": visibility_scope,
+                            "source": "django_admin",
+                        },
+                        using=database,
+                    )
+                self.message_user(
+                    request,
+                    f"已處理 {len(documents)} 份原始文件，更新 {changed} 份的可見性。",
+                    messages.SUCCESS,
+                )
+                return None
+        else:
+            form = SourceDocumentVisibilityForm()
+
+        return TemplateResponse(
+            request,
+            "admin/documents/sourcedocument/set_visibility.html",
+            {
+                **self.admin_site.each_context(request),
+                "title": "批量設定原始文件可見性",
+                "opts": self.model._meta,
+                "documents": queryset,
+                "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+                "form": form,
+            },
+        )
 
 
 @admin.register(DocumentChunk)
