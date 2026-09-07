@@ -184,7 +184,7 @@ def ensure_research_student_for_user(account_user) -> Student:
         defaults={
             "display_name": display_name,
             "status": StudentStatus.ACTIVE,
-            "visibility_scope": VisibilityScope.ADMIN,
+            "visibility_scope": VisibilityScope.STUDENT,
         },
     )
     return student

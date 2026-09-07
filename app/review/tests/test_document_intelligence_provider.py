@@ -117,7 +117,8 @@ class DocumentIntelligenceProviderTests(TestCase):
         return {
             "metadata": {
                 "title": {"value": "AI金融投資策略研究", "confidence": 0.94},
-                "publication_year": None,
+                "publication_year": {"value": 2010, "confidence": 0.99},
+                "research_type": {"value": "master_thesis", "confidence": 0.99},
                 "student_authors": authors or ["譚孝安"],
                 "advisors": ["蔡麗茹"],
                 "co_advisors": ["王大明"],
@@ -170,6 +171,9 @@ class DocumentIntelligenceProviderTests(TestCase):
         )
 
         candidate = self.document_intelligence_item().candidate_value
+
+        self.assertIsNone(candidate["metadata"]["publication_year"])
+        self.assertIsNone(candidate["metadata"]["research_type"])
 
         self.assertEqual(len(candidate["authors"]), 1)
         self.assertEqual(candidate["authors"][0]["full_name"], "譚孝安")

@@ -6,6 +6,7 @@ from accounts.models import Role, User, UserRole
 from professors.models import Professor
 from research.admin import (
     ResearchWorkAdmin,
+    StudentAdmin,
     WorkAdvisorAdmin,
     WorkAdvisorInline,
     WorkAuthorAdmin,
@@ -35,6 +36,7 @@ class ResearchWorkAdminObjectPermissionTests(TestCase):
         self.author_admin = WorkAuthorAdmin(WorkAuthor, self.admin_site)
         self.field_admin = WorkFieldAdmin(WorkField, self.admin_site)
         self.method_admin = WorkMethodAdmin(WorkMethod, self.admin_site)
+        self.student_admin = StudentAdmin(Student, self.admin_site)
         teacher_role = Role.objects.get(slug="teacher")
         admin_role = Role.objects.get(slug="admin")
 
@@ -129,10 +131,31 @@ class ResearchWorkAdminObjectPermissionTests(TestCase):
         self.assertTrue(self.model_admin.has_add_permission(request))
         self.assertTrue(self.model_admin.has_delete_permission(request, self.other_work))
         self.assertIn("transition_to_approved", self.model_admin.get_actions(request))
+        self.assertNotIn("approve_all_ai_candidates_and_publish", self.model_admin.get_actions(request))
         self.assertIn(
             "status", self.model_admin.get_readonly_fields(request, self.own_work)
         )
         self.assertIn("status", self.model_admin.get_readonly_fields(request, None))
+
+    def test_admin_can_set_selected_student_visibility_in_bulk(self):
+        student = Student.objects.create(display_name="Visibility Student")
+        request = self.factory.post(
+            "/admin/research/student/",
+            {"apply": "1", "visibility_scope": "student"},
+        )
+        request.user = self.admin_user
+        request.request_id = "student-visibility-request-1"
+        request.session = {}
+        request._messages = FallbackStorage(request)
+
+        response = self.student_admin.set_selected_visibility(
+            request,
+            Student.objects.filter(pk=student.pk),
+        )
+
+        self.assertIsNone(response)
+        student.refresh_from_db()
+        self.assertEqual(student.visibility_scope, "student")
 
     def test_admin_lifecycle_action_uses_service_and_writes_audit(self):
         request = self.factory.post(

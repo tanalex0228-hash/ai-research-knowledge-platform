@@ -88,7 +88,7 @@ class ResearchVisibilityTests(TestCase):
 
 
 class ResearchRelationshipTests(TestCase):
-    def test_student_user_author_link_creates_private_author_identity(self):
+    def test_student_user_author_link_defaults_to_student_visible_author_identity(self):
         user = User.objects.create_user(
             username="Roster Student",
             email="roster-student@example.test",
@@ -101,7 +101,7 @@ class ResearchRelationshipTests(TestCase):
         self.assertEqual(author.user, user)
         self.assertEqual(author.student.user, user)
         self.assertEqual(author.student.display_name, "Roster Student")
-        self.assertEqual(author.student.visibility_scope, VisibilityScope.ADMIN)
+        self.assertEqual(author.student.visibility_scope, VisibilityScope.STUDENT)
 
     def test_non_student_user_cannot_become_research_author(self):
         user = User.objects.create_user(

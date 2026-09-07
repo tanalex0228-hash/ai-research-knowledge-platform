@@ -76,8 +76,11 @@ class ReviewWorkflowTests(TestCase):
         *,
         target_type: str = ReviewTargetType.RESEARCH_WORK,
         target_id=None,
+        field_path: str = "fields",
+        candidate_value=None,
     ) -> ReviewItem:
         chunk = self.make_chunk("candidate")
+        candidate_value = candidate_value or {"slug": "ai-finance"}
         job = AIExtractionJob.objects.create(
             source_document=chunk.source_document,
             prompt_version=self.prompt,
@@ -86,7 +89,7 @@ class ReviewWorkflowTests(TestCase):
         result = AIExtractionResult.objects.create(
             job=job,
             result_type=ExtractionResultType.FIELD,
-            candidate_data={"slug": "ai-finance"},
+            candidate_data=candidate_value,
             confidence=0.82,
             primary_evidence_chunk=chunk,
             schema_version="1",
@@ -95,9 +98,30 @@ class ReviewWorkflowTests(TestCase):
             extraction_result=result,
             target_type=target_type,
             target_id=target_id or chunk.source_document.research_work_id,
-            field_path="fields",
+            field_path=field_path,
             current_value={},
             candidate_value=result.candidate_data,
+        )
+
+    def test_approved_ai_candidate_never_changes_research_work(self):
+        item = self.make_review_item(
+            field_path="year",
+            candidate_value={"value": 2010},
+        )
+        work = item.extraction_result.job.source_document.research_work
+        original = (work.title, work.abstract, work.year, work.language, work.work_type, work.status)
+
+        decide_review_item(
+            item=item,
+            reviewer=self.make_admin(),
+            action=ReviewAction.APPROVE,
+            reason="The analysis was reviewed but remains non-canonical.",
+        )
+
+        work.refresh_from_db()
+        self.assertEqual(
+            (work.title, work.abstract, work.year, work.language, work.work_type, work.status),
+            original,
         )
 
     def make_teacher(self, suffix: str, *, active: bool = True):
@@ -380,7 +404,10 @@ class ReviewWorkflowTests(TestCase):
         chunk = DocumentChunk.objects.create(
             source_document=doc,
             chunk_index=0,
-            text="Explainability Test Content - Abstract: This is about research fields.",
+            text=(
+                "113 學年度專題報告。 Explainability Test Content - "
+                "Abstract: This is about research fields."
+            ),
             token_count=10,
             visibility_scope=VisibilityScope.PUBLIC,
         )
@@ -399,12 +426,17 @@ class ReviewWorkflowTests(TestCase):
 
         job.refresh_from_db()
         self.assertEqual(job.schema_version, "document_intelligence.v1")
-        self.assertEqual(job.prompt_version.version, 2)
+        self.assertEqual(job.prompt_version.version, 3)
         intelligence_item = items.get(field_path="document_intelligence")
         self.assertIn("metadata", intelligence_item.candidate_value)
         self.assertIn("knowledge_graph", intelligence_item.candidate_value)
         self.assertIn("academic_summary", intelligence_item.candidate_value)
         self.assertIn("database_actions", intelligence_item.candidate_value)
+        self.assertFalse(items.filter(field_path="year").exists())
+        self.assertFalse(items.filter(field_path="work_type").exists())
         self.assertIsNone(
             intelligence_item.candidate_value["metadata"]["publication_year"]
+        )
+        self.assertIsNone(
+            intelligence_item.candidate_value["metadata"]["research_type"]
         )

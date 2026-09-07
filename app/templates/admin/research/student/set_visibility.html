@@ -1,0 +1,29 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>批量設定研究學生可見性</h1>
+  <p>將變更下列 {{ students|length }} 位研究學生作者的可見性。這不會修改使用者帳號、論文內容或作者關聯。</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="set_selected_visibility">
+    {% for student in students %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ student.pk }}">
+    {% endfor %}
+
+    {{ form.non_field_errors }}
+    <fieldset class="module aligned">
+      <div class="form-row">
+        {{ form.visibility_scope.errors }}
+        {{ form.visibility_scope.label_tag }}
+        {{ form.visibility_scope }}
+        {% if form.visibility_scope.help_text %}<div class="help">{{ form.visibility_scope.help_text }}</div>{% endif %}
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" name="apply" value="確認更新" class="default">
+      <a href="{% url 'admin:research_student_changelist' %}" class="button cancel-link">取消</a>
+    </div>
+  </form>
+{% endblock %}

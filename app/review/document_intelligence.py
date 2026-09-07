@@ -16,13 +16,16 @@ DOCUMENT_INTELLIGENCE_PROMPT = """You are the Document Intelligence Engine of an
 
 Your task is NOT to summarize a document.
 
-Your task is to READ, UNDERSTAND and STRUCTURE an entire academic paper into canonical research metadata and an academic research summary.
+Your task is to READ, UNDERSTAND and STRUCTURE an entire academic paper into an isolated analysis record and academic research summary.
 
 This platform is used by university students, professors and researchers.
 
 Every uploaded PDF will become a ResearchWork inside the platform.
 
-Your output will be used to automatically populate the database.
+Your output is read-only analysis. It must never update, trigger, or apply
+changes to canonical database records, document metadata, relationships, or lifecycle.
+Never detect, infer, or return publication year or research type. Set
+metadata.publication_year and metadata.research_type to null.
 
 Accuracy is more important than creativity.
 
@@ -367,6 +370,11 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
     metadata_evidence: dict[str, list[dict[str, Any]]] = {}
     confidence: dict[str, float | None] = {}
     for key in metadata_keys:
+        if key in {"research_type", "publication_year"}:
+            metadata[key] = None
+            confidence[key] = None
+            metadata_evidence[key] = []
+            continue
         raw_value = metadata_raw.get(key)
         value = scalar_value(raw_value)
         metadata[key] = value if value not in ("", []) else None
@@ -715,8 +723,8 @@ def build_document_intelligence_payload(
         "title": extracted.get("title"),
         "subtitle": None,
         "language": extracted.get("language"),
-        "research_type": extracted.get("work_type"),
-        "publication_year": extracted.get("year"),
+        "research_type": None,
+        "publication_year": None,
         "research_degree": None,
         "department": department,
         "school": school,
@@ -838,9 +846,9 @@ def build_document_intelligence_payload(
         "confidence": {
             "title": extracted.get("title_confidence"),
             "abstract": extracted.get("abstract_confidence"),
-            "publication_year": extracted.get("year_confidence"),
+            "publication_year": None,
             "language": extracted.get("language_confidence"),
-            "research_type": extracted.get("work_type_confidence"),
+            "research_type": None,
             "database_matching": 0.95 if (fields or methods or advisors or authors) else 0.5,
         },
         "database_actions": {

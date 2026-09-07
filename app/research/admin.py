@@ -1,10 +1,15 @@
-from django.contrib import admin
 from django.contrib import messages
+from django.contrib import admin
+from django.contrib.admin import helpers
+from django import forms
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.template.response import TemplateResponse
 from django.utils.html import format_html
 
 from accounts.models import User
-from accounts.permissions import is_platform_admin, visible_scopes_for
+from accounts.permissions import VisibilityScope, is_platform_admin, visible_scopes_for
+from accounts.services import record_audit_event
 from professors.services import linked_professor_for_teacher
 from public_site.request_ids import request_id_for
 
@@ -45,6 +50,14 @@ def _can_access_work(user, research_work=None) -> bool:
     if research_work is None:
         return _teacher_manageable_works(user).exists()
     return _teacher_manageable_works(user).filter(pk=research_work.pk).exists()
+
+
+class StudentVisibilityForm(forms.Form):
+    visibility_scope = forms.ChoiceField(
+        label="可見性範圍",
+        choices=VisibilityScope.choices,
+        help_text="只會變更選取的研究學生作者資料，不會更動使用者帳號或論文內容。",
+    )
 
 
 class WorkAdvisorInline(admin.TabularInline):
@@ -146,7 +159,6 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         "transition_to_archived",
         "transition_to_rejected",
         "restore_archived",
-        "approve_all_ai_candidates_and_publish",
         "rerun_extraction_pipeline",
         "hard_delete_selected_research_works",
     )
@@ -274,64 +286,6 @@ class ResearchWorkAdmin(admin.ModelAdmin):
     def restore_archived(self, request, queryset):
         self._transition_selected(request, queryset, ResearchWorkStatus.PUBLISHED)
 
-    @admin.action(description="AI：核准所有候選並發布")
-    def approve_all_ai_candidates_and_publish(self, request, queryset):
-        """Batch-approve all pending AI-extracted ReviewItems and auto-publish."""
-        from review.models import ReviewItem, ReviewState, ReviewAction
-        from review.services import decide_review_item
-        request_id = request_id_for(request)
-        total_approved = 0
-        total_skipped = 0
-        total_works = 0
-        for work in queryset:
-            pending_items = ReviewItem.objects.filter(
-                target_id=work.pk,
-                state=ReviewState.PENDING,
-            )
-            work_approved = 0
-            for item in pending_items:
-                try:
-                    decide_review_item(
-                        item=item,
-                        reviewer=request.user,
-                        action=ReviewAction.APPROVE,
-                        reason="透過 Django 後台 AI 動作批次核准。",
-                    )
-                    work_approved += 1
-                except Exception:
-                    total_skipped += 1
-            total_approved += work_approved
-            if work_approved > 0:
-                total_works += 1
-            # Auto-publish if still in reviewable state
-            work.refresh_from_db()
-            if work.status in ("under_review", "approved", "ai_extracted"):
-                try:
-                    if work.status in ("under_review", "ai_extracted"):
-                        transition_research_work(
-                            research_work=work,
-                            to_status=ResearchWorkStatus.APPROVED,
-                            actor=request.user,
-                            reason="管理員批次核准所有 AI 候選。",
-                            request_id=request_id,
-                        )
-                        work.refresh_from_db()
-                    transition_research_work(
-                        research_work=work,
-                        to_status=ResearchWorkStatus.PUBLISHED,
-                        actor=request.user,
-                        reason="批次核准 AI 候選後自動發布。",
-                        request_id=request_id,
-                    )
-                except ValidationError:
-                    pass
-        self.message_user(
-            request,
-            f"已核准 {total_approved} 筆 AI 候選，涵蓋 {total_works} 筆研究成果。"
-            f"已略過 {total_skipped} 筆項目。",
-            level=messages.SUCCESS if total_approved else messages.WARNING,
-        )
-
     @admin.action(description="AI：重新執行文件擷取流程")
     def rerun_extraction_pipeline(self, request, queryset):
         """Re-trigger PDF extraction for all source documents of selected works."""
@@ -395,6 +349,7 @@ class StudentAdmin(admin.ModelAdmin):
     search_fields = ("display_name", "normalized_name", "public_display_name")
     autocomplete_fields = ("user",)
     readonly_fields = ("id", "normalized_name", "created_at", "updated_at")
+    actions = ("set_selected_visibility",)
 
     @admin.display(description="學生使用者")
     def linked_user(self, obj):
@@ -427,6 +382,56 @@ class StudentAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return is_platform_admin(request.user)
+
+    @admin.action(description="批量設定可見性範圍")
+    def set_selected_visibility(self, request, queryset):
+        if not is_platform_admin(request.user):
+            self.message_user(request, "您沒有批量設定研究學生可見性的權限。", messages.ERROR)
+            return None
+
+        if request.POST.get("apply"):
+            form = StudentVisibilityForm(request.POST)
+            if form.is_valid():
+                visibility_scope = form.cleaned_data["visibility_scope"]
+                with transaction.atomic():
+                    students = list(queryset.select_for_update())
+                    changed = 0
+                    for student in students:
+                        if student.visibility_scope != visibility_scope:
+                            student.visibility_scope = visibility_scope
+                            student.save(update_fields=("visibility_scope", "updated_at"))
+                            changed += 1
+                    record_audit_event(
+                        event_type="research.students.visibility_changed_bulk",
+                        actor=request.user,
+                        request_id=request_id_for(request),
+                        metadata={
+                            "student_count": len(students),
+                            "changed_count": changed,
+                            "visibility_scope": visibility_scope,
+                        },
+                    )
+                self.message_user(
+                    request,
+                    f"已處理 {len(students)} 位研究學生，更新 {changed} 位的可見性。",
+                    messages.SUCCESS,
+                )
+                return None
+        else:
+            form = StudentVisibilityForm()
+
+        return TemplateResponse(
+            request,
+            "admin/research/student/set_visibility.html",
+            {
+                **self.admin_site.each_context(request),
+                "title": "批量設定研究學生可見性",
+                "opts": self.model._meta,
+                "students": queryset,
+                "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+                "form": form,
+            },
+        )
 
 
 @admin.register(FeaturedWork)

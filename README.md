@@ -59,7 +59,7 @@ The teacher demo accounts are `demo_teacher_1` through `demo_teacher_5`. The `de
 - Persisted `ResearchWork.status` changes go through a row-locked lifecycle service. Every legal transition records an immutable actor, reason, request ID, previous state, and resulting state. Historical imports may still create an initial non-draft state, but later changes cannot bypass the service.
 - Teachers using Django Admin see and edit only their active linked `Professor`, advised `ResearchWork` records, and in-scope documents attached to those works. Advisor ownership and publication visibility cannot be reassigned by a teacher.
 - A teacher upload is always `teacher` visibility. A `SourceDocument` file, parent work, and visibility are immutable after creation so evidence never silently points at different bytes or gains wider access; a future reviewed promotion workflow is intentionally deferred.
-- `ReviewItem` governance fields are changed only by `decide_review_item()`. The service locks the item, validates the transition, appends an immutable `ReviewDecision`, and updates the item atomically.
+- `ReviewItem` governance fields are changed only by `decide_review_item()`. The service locks the item, validates the transition, appends an immutable `ReviewDecision`, and updates the isolated review record atomically. AI analysis is never promoted into ResearchWork, taxonomy, people, graph, or lifecycle data.
 - API 400, 403, 404, 405, and CSRF failures use `{error_code, message, details, request_id}`. Missing and unauthorized protected resources use the same non-disclosing 404 response.
 - Every response has `X-Request-ID`. Upload responses, upload audit events, and lifecycle audits reuse the same sanitized or generated request ID.
 - API and Django Admin uploads commit the `SourceDocument` and `AuditLog` together; a failed audit rolls back the row and removes the new blob.
@@ -97,6 +97,10 @@ python app/manage.py import_system_roster /path/to/系統名單.xlsx --exclude-r
 匯入本身不授予專題上傳資格。
 
 研究成果的「作者」在 Django Admin 中可直接搜尋並選擇已啟用、且具有 `student` 角色的使用者。系統會自動建立或連結該使用者的隱私保護研究作者身分；公開頁面的姓名可見性仍依研究學生設定處理。
+
+### 研究學生作者可見性
+
+在 Django Admin 的「研究目錄 → 研究學生」可勾選多位作者後，從「動作」選擇「批量設定可見性範圍」。選擇「學生與教職員」後，已登入的 student、teacher、admin 可在研究成果頁看見作者姓名；訪客仍維持匿名。未來從已登入學生帳號建立的研究學生作者，預設亦為「學生與教職員」。
 
 ### 使用者批量授予權限群組
 
@@ -241,7 +245,7 @@ AI output into approved metadata.
 - Lifecycle transitions are available through the service and administrator actions, not a dedicated public REST transition endpoint.
 - Teachers maintain existing advised works but cannot create works, change ownership, publish, or widen visibility; administrators perform those governed actions.
 - Existing source documents cannot be promoted between visibility scopes in Phase 1.5; a reviewed document-release workflow belongs to the next governance increment.
-- Production-grade LLM metadata extraction depends on provider configuration. Without a provider/API key, ingestion uses the deterministic fallback and all extracted suggestions remain in Review Queue.
+- Production-grade LLM metadata extraction depends on provider configuration. Without a provider/API key, ingestion uses the deterministic fallback and all extracted suggestions remain in a read-only Review Queue. AI does not detect publication year or work type, and cannot modify any canonical research record.
 - Vector chunks may exist without remote embeddings; semantic retrieval currently uses the local deterministic embedding baseline when available.
 - AI teacher matching is deterministic and evidence-bound; it does not call an LLM and does not guarantee advisor availability.
 - RAG answer generation, graph analytics/visualization, institutional SSO, and news processing remain out of scope.

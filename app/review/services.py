@@ -165,150 +165,18 @@ def decide_review_item(
             update_fields={"state", "assigned_to", "resolved_at", "updated_at"}
         )
 
-        if resulting_state == ReviewState.APPROVED:
-            promote_value = decided_value if action == ReviewAction.EDIT else locked.candidate_value
-            promote_review_item(locked, promote_value)
-
-    if resulting_state in TERMINAL_REVIEW_STATES and locked.target_type == ReviewTargetType.RESEARCH_WORK:
-        work_id = locked.target_id
-        pending_count = ReviewItem.objects.filter(
-            target_type=ReviewTargetType.RESEARCH_WORK,
-            target_id=work_id
-        ).exclude(state__in=TERMINAL_REVIEW_STATES).count()
-        if pending_count == 0:
-            from research.models import ResearchWork
-            from research.services import transition_research_work
-            try:
-                work = ResearchWork.objects.get(pk=work_id)
-                if work.status == "under_review":
-                    transition_research_work(
-                        research_work=work,
-                        to_status="approved",
-                        actor=reviewer,
-                        reason="All candidate review items resolved.",
-                        request_id=f"auto-approve-{item.id}",
-                    )
-                work.refresh_from_db()
-                if work.status == "approved":
-                    transition_research_work(
-                        research_work=work,
-                        to_status="published",
-                        actor=reviewer,
-                        reason="Auto-publishing after successful review completion.",
-                        request_id=f"auto-publish-{item.id}",
-                    )
-            except Exception:
-                pass
-
     return decision
 
 
 def promote_review_item(item: ReviewItem, value: dict | str) -> None:
-    """Promote an approved review item candidate value to canonical catalog tables."""
+    """Reject canonical promotion of AI analysis.
 
-    from research.models import ResearchWork, WorkField, WorkMethod, RelationshipSource, RelationshipStatus
-    from taxonomy.models import ResearchField, ResearchMethod
+    AI extraction is an isolated, read-only analysis aid.  A human may record
+    a review decision, but the candidate must never write ResearchWork data,
+    taxonomy, people, graph edges, or lifecycle state.
+    """
 
-    if item.target_type == ReviewTargetType.RESEARCH_WORK:
-        try:
-            work = ResearchWork.objects.get(pk=item.target_id)
-        except ResearchWork.DoesNotExist as exc:
-            raise ValidationError("Target ResearchWork does not exist.") from exc
-
-        field_path = item.field_path
-        extracted_value = value
-        if isinstance(value, dict):
-            extracted_value = value.get("slug") or value.get("value") or value.get("text") or value
-
-        if field_path.startswith("fields"):
-            slug = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
-            field, _ = ResearchField.objects.get_or_create(
-                slug=slug,
-                defaults={
-                    "display_name": slug.replace("-", " ").title(),
-                    "status": "active",
-                }
-            )
-            confidence = item.extraction_result.confidence if item.extraction_result else 1.0
-            WorkField.objects.update_or_create(
-                research_work=work,
-                research_field=field,
-                defaults={
-                    "confidence": confidence,
-                    "source_type": RelationshipSource.AI_APPROVED,
-                    "status": RelationshipStatus.APPROVED,
-                }
-            )
-        elif field_path.startswith("methods"):
-            slug = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
-            method, _ = ResearchMethod.objects.get_or_create(
-                slug=slug,
-                defaults={
-                    "display_name": slug.replace("-", " ").title(),
-                    "status": "active",
-                }
-            )
-            confidence = item.extraction_result.confidence if item.extraction_result else 1.0
-            WorkMethod.objects.update_or_create(
-                research_work=work,
-                research_method=method,
-                defaults={
-                    "confidence": confidence,
-                    "source_type": RelationshipSource.AI_APPROVED,
-                    "status": RelationshipStatus.APPROVED,
-                }
-            )
-        elif field_path == "title":
-            title = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
-            work.title = title
-            work.save(update_fields=["title"])
-        elif field_path == "abstract":
-            abstract = extracted_value if isinstance(extracted_value, str) else str(extracted_value)
-            work.abstract = abstract
-            work.save(update_fields=["abstract"])
-        elif field_path == "year":
-            work.year = int(extracted_value)
-            work.save(update_fields=["year"])
-        elif field_path == "language":
-            work.language = str(extracted_value)
-            work.save(update_fields=["language"])
-        elif field_path == "work_type":
-            work.work_type = str(extracted_value)
-            work.save(update_fields=["work_type"])
-        elif field_path == "advisors":
-            from professors.models import Professor
-            from research.models import AdvisorRole
-            work.advisor_links.all().delete()
-            names = extracted_value if isinstance(extracted_value, list) else [extracted_value]
-            for pos, name in enumerate(names, start=1):
-                try:
-                    prof = Professor.objects.get(display_name=name)
-                    WorkAdvisor.objects.update_or_create(
-                        research_work=work,
-                        professor=prof,
-                        defaults={
-                            "role": AdvisorRole.PRIMARY if pos == 1 else AdvisorRole.CO_ADVISOR,
-                            "position": pos,
-                        }
-                    )
-                except Professor.DoesNotExist:
-                    pass
-        elif field_path == "authors":
-            from research.models import Student
-            work.author_links.all().delete()
-            names = extracted_value if isinstance(extracted_value, list) else [extracted_value]
-            for pos, name in enumerate(names, start=1):
-                student, _ = Student.objects.get_or_create(
-                    display_name=name,
-                    defaults={"status": "active", "visibility_scope": "public"}
-                )
-                WorkAuthor.objects.update_or_create(
-                    research_work=work,
-                    student=student,
-                    defaults={
-                        "position": pos,
-                    }
-                )
+    raise PermissionDenied("AI analysis candidates cannot be promoted to canonical data.")
 
 
 
@@ -341,7 +209,7 @@ def create_extraction_job_and_candidates(
     # 1. Get or create a PromptVersion for metadata extraction
     prompt_version, _ = PromptVersion.objects.get_or_create(
         key="metadata-extraction",
-        version=2,
+        version=3,
         defaults={
             "template": DOCUMENT_INTELLIGENCE_PROMPT,
             "status": "active",
@@ -496,31 +364,6 @@ def create_extraction_job_and_candidates(
                   source_text=first_chunk_text[:1000],
                   extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
 
-    # Extract Year
-    year = None
-    year_from_document = False
-    for roc_match in re.finditer(r"(?<!\d)(\d{2,3})\s*學年度", all_chunks_text):
-        y = int(roc_match.group(1))
-        if 80 <= y <= 150:
-            year = y + 1911
-            year_from_document = True
-            break
-    if not year_from_document:
-        for ce_match in re.finditer(r"\b(19\d{2}|20\d{2})\b", all_chunks_text):
-            candidate_year = int(ce_match.group(1))
-            if 1900 <= candidate_year <= 2100:
-                year = candidate_year
-                year_from_document = True
-                break
-    extracted_summary["year"] = year if year_from_document else None
-    extracted_summary["year_confidence"] = 0.85 if year_from_document else None
-    if year_from_document:
-        add_candidate("year", year, ExtractionResultType.SUMMARY,
-                      confidence=0.85,
-                      evidence="Matched explicit academic ROC year or CE year pattern.",
-                      source_text=all_chunks_text[:500],
-                      extraction_reason="Fail-closed regex match for explicit 學年度 or CE year format.")
-
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
     language = "zh-Hant" if has_chinese else "en"
@@ -531,31 +374,6 @@ def create_extraction_job_and_candidates(
                   evidence="Matched unicode ranges for Chinese characters.",
                   source_text=all_chunks_text[:1000],
                   extraction_reason="Scanned text character encoding detection.")
-
-    # Extract Work Type
-    work_type = None
-    work_type_from_document = False
-    all_chunks_text_lower = all_chunks_text.lower()
-    if "專題成果" in all_chunks_text_lower or "專題報告" in all_chunks_text_lower or "大學部" in all_chunks_text_lower:
-        work_type = "undergraduate_project"
-        work_type_from_document = True
-    elif "碩士論文" in all_chunks_text_lower or "thesis" in all_chunks_text_lower:
-        work_type = "master_thesis"
-        work_type_from_document = True
-    elif "期刊" in all_chunks_text_lower or "journal" in all_chunks_text_lower:
-        work_type = "journal_article"
-        work_type_from_document = True
-    elif "研討會" in all_chunks_text_lower or "conference" in all_chunks_text_lower:
-        work_type = "conference_paper"
-        work_type_from_document = True
-    extracted_summary["work_type"] = work_type if work_type_from_document else None
-    extracted_summary["work_type_confidence"] = 0.9 if work_type_from_document else None
-    if work_type_from_document:
-        add_candidate("work_type", work_type, ExtractionResultType.SUMMARY,
-                      confidence=0.9,
-                      evidence="Matched standard document type keywords (e.g. 碩士論文, 專題).",
-                      source_text=all_chunks_text[:1000],
-                      extraction_reason="Keyword lookup in document text.")
 
     # Extract Advisors
     advisors_found = labeled_people(r"(?<!共同)指導(?:教授|老師)")
