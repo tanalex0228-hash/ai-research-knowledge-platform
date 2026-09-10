@@ -96,6 +96,8 @@ python app/manage.py import_system_roster /path/to/系統名單.xlsx --exclude-r
 
 匯入本身不授予專題上傳資格。
 
+平台管理員亦可從 Django Admin 的「帳號與角色 → 使用者」右上角選擇「批量匯入學生」。此入口採相同固定欄位與完整驗證規則，只讀取六個學生工作表，並在同一交易中建立 `User`、`StudentRoster`、`UserProfile`、平台 `student` 身份，以及 Django `student` 權限群組。上傳檔案與明文密碼僅存在於該請求的暫存檔，不會保存；既有帳號不會重設密碼。
+
 研究成果的「作者」在 Django Admin 中可直接搜尋並選擇已啟用、且具有 `student` 角色的使用者。系統會自動建立或連結該使用者的隱私保護研究作者身分；公開頁面的姓名可見性仍依研究學生設定處理。
 
 ### 研究學生作者可見性

@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  {% if can_import_students %}
+    <li>
+      <a href="{% url 'admin:accounts_user_import_students' %}">批量匯入學生</a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

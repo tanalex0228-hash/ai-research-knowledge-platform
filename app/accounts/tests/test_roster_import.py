@@ -6,6 +6,8 @@ from pathlib import Path
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.contrib.auth.models import Group
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from openpyxl import Workbook
 
@@ -64,6 +66,7 @@ class SystemRosterImportTests(TestCase):
         self.assertEqual(user.username, "王小明")
         self.assertTrue(user.check_password("temporary-password"))
         self.assertTrue(user.has_platform_role("student"))
+        self.assertTrue(user.groups.filter(name="student").exists())
         self.assertFalse(user.is_staff)
         profile = UserProfile.objects.get(user=user)
         self.assertEqual(profile.display_name, "王小明")
@@ -161,3 +164,39 @@ class SystemRosterImportTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("import_system_roster", str(path), "--apply")
         self.assertEqual(User.objects.count(), 0)
+
+    def test_platform_admin_can_import_students_from_user_admin_page(self):
+        administrator = User.objects.create_superuser(
+            username="roster-admin",
+            email="roster-admin@example.test",
+            password="admin-password",
+        )
+        path = self._write_workbook(
+            {"金企二甲": [self._student_row(password="new-student-password")]}
+        )
+        self.client.force_login(administrator)
+
+        page = self.client.get("/admin/accounts/user/import-students/")
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "批量匯入學生帳號")
+
+        response = self.client.post(
+            "/admin/accounts/user/import-students/",
+            {
+                "workbook": SimpleUploadedFile(
+                    "系統名單.xlsx",
+                    path.read_bytes(),
+                    content_type=(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    ),
+                ),
+                "confirm": "on",
+            },
+        )
+
+        self.assertRedirects(response, "/admin/accounts/user/")
+        user = User.objects.get(email="414411001@cloud.fju.edu.tw")
+        self.assertTrue(user.check_password("new-student-password"))
+        self.assertTrue(user.has_platform_role("student"))
+        self.assertTrue(user.groups.filter(name="student").exists())
+        self.assertEqual(Professor.objects.count(), 0)

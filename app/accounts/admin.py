@@ -1,11 +1,18 @@
+import tempfile
+
 from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.models import Group
 from django.contrib.admin import helpers
 from django import forms
+from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
+from django.urls import path, reverse
+from django.utils.text import get_valid_filename
 
 from accounts.permissions import is_platform_admin
 from accounts.services import record_audit_event
@@ -13,6 +20,7 @@ from public_site.request_ids import request_id_for
 from research.hard_delete import hard_delete_user
 
 from .models import AuditLog, Role, User, UserRole
+from .roster_import import RosterWorkbookError, apply_import_plan, build_import_plan
 
 
 class UserRoleInline(admin.TabularInline):
@@ -35,6 +43,27 @@ class GrantGroupsForm(forms.Form):
         self.fields["groups"].queryset = Group.objects.order_by("name")
 
 
+class StudentRosterImportForm(forms.Form):
+    workbook = forms.FileField(
+        label="系統名單 Excel 檔",
+        help_text=(
+            "僅接受固定格式的 .xlsx；系統只讀取六個學生工作表，不會讀取教師名單。"
+        ),
+    )
+    confirm = forms.BooleanField(
+        label="我確認要建立新學生帳號，並以 Excel 內的預設密碼設定新帳號。",
+    )
+
+    def clean_workbook(self):
+        workbook = self.cleaned_data["workbook"]
+        filename = get_valid_filename(workbook.name or "")
+        if not filename.lower().endswith(".xlsx"):
+            raise forms.ValidationError("僅接受 .xlsx 格式的系統名單檔案。")
+        if workbook.size > settings.MAX_ROSTER_WORKBOOK_BYTES:
+            raise forms.ValidationError("系統名單檔案超過允許的大小。")
+        return workbook
+
+
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     fieldsets = DjangoUserAdmin.fieldsets + (
@@ -49,6 +78,70 @@ class UserAdmin(DjangoUserAdmin):
     search_fields = ("username", "email", "first_name", "last_name")
     readonly_fields = ("id", "last_login", "date_joined")
     actions = ("grant_selected_groups", "hard_delete_selected_users")
+    change_list_template = "admin/accounts/user/change_list.html"
+
+    def get_urls(self):
+        custom_urls = [
+            path(
+                "import-students/",
+                self.admin_site.admin_view(self.import_students_view),
+                name="accounts_user_import_students",
+            ),
+        ]
+        return custom_urls + super().get_urls()
+
+    def changelist_view(self, request, extra_context=None):
+        context = dict(extra_context or {})
+        context["can_import_students"] = is_platform_admin(request.user)
+        return super().changelist_view(request, extra_context=context)
+
+    def import_students_view(self, request):
+        if not is_platform_admin(request.user):
+            raise PermissionDenied("Only platform administrators may import student accounts.")
+
+        if request.method == "POST":
+            form = StudentRosterImportForm(request.POST, request.FILES)
+            if form.is_valid():
+                workbook = form.cleaned_data["workbook"]
+                source_name = get_valid_filename(workbook.name) or "系統名單.xlsx"
+                # Passwords from the worksheet must never enter a log, session,
+                # or durable storage.  The upload exists only for this request.
+                with tempfile.NamedTemporaryFile(suffix=".xlsx") as temporary_file:
+                    for chunk in workbook.chunks():
+                        temporary_file.write(chunk)
+                    temporary_file.flush()
+                    try:
+                        plan = build_import_plan(
+                            temporary_file.name,
+                            source=source_name,
+                        )
+                        results = apply_import_plan(plan, actor=request.user)
+                    except RosterWorkbookError as exc:
+                        form.add_error("workbook", str(exc))
+                    else:
+                        self.message_user(
+                            request,
+                            "學生名冊匯入完成："
+                            f"新增 {results['created_users']} 個帳號，"
+                            f"既有 {results['existing_users']} 個帳號未重設密碼。",
+                            messages.SUCCESS,
+                        )
+                        return HttpResponseRedirect(
+                            reverse("admin:accounts_user_changelist")
+                        )
+        else:
+            form = StudentRosterImportForm()
+
+        return TemplateResponse(
+            request,
+            "admin/accounts/user/import_students.html",
+            {
+                **self.admin_site.each_context(request),
+                "title": "批量匯入學生帳號",
+                "opts": self.model._meta,
+                "form": form,
+            },
+        )
 
     def _can_hard_delete(self, request) -> bool:
         return is_platform_admin(request.user) and request.user.has_perm(

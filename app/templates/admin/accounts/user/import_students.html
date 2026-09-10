@@ -1,0 +1,27 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>批量匯入學生帳號</h1>
+  <p>上傳固定格式的「系統名單.xlsx」。系統只讀取金企二甲、金企二乙、金企三甲、金企三乙、金企四甲、金企四乙六個學生工作表；不會讀取、建立或修改教師名單。</p>
+  <p>每位新學生會建立使用者帳號、學生名冊與個人資料，使用 Excel 的「姓名、帳號、學號、預設密碼、身份、權限群組」欄位；並授予平台 student 身份與 Django 的 student 權限群組。同名學生僅以學校信箱作為內部使用者名稱，個人資料仍顯示本名。</p>
+  <p><strong>既有帳號不會重設密碼。</strong> 匯入前會先完整驗證所有學生列；任何欄位、學號、信箱或帳號衝突都會停止整批匯入且不寫入資料庫。上傳檔與明文密碼不會保存。</p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <fieldset class="module aligned">
+      {% for field in form %}
+        <div class="form-row">
+          {{ field.errors }}
+          {{ field.label_tag }}
+          {{ field }}
+          {% if field.help_text %}<div class="help">{{ field.help_text }}</div>{% endif %}
+        </div>
+      {% endfor %}
+    </fieldset>
+    <div class="submit-row">
+      <input type="submit" value="驗證並匯入學生" class="default">
+      <a href="{% url 'admin:accounts_user_changelist' %}" class="button cancel-link">取消</a>
+    </div>
+  </form>
+{% endblock %}

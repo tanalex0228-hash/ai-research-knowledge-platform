@@ -15,6 +15,7 @@ from typing import Iterable
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth.models import Group
 from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -244,6 +245,11 @@ def apply_import_plan(
         )
         if student_role is None:
             raise RosterWorkbookError("The active student role does not exist")
+        # Django groups are used by the administration permission picker.  Keep
+        # this in sync with the normalized platform role so a roster-created
+        # student has both the public-site identity and the configured
+        # administration permission group.
+        student_group, _ = Group.objects.get_or_create(name="student")
         existing_users = {
             user.email: user
             for user in User.objects.filter(email__in=emails).prefetch_related("roles")
@@ -327,6 +333,7 @@ def apply_import_plan(
                     role=student_role,
                     defaults={"assigned_by": actor},
                 )
+            user.groups.add(student_group)
 
             profile, created = UserProfile.objects.get_or_create(
                 user=user,
