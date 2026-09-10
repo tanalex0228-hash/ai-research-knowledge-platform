@@ -20,7 +20,11 @@ from public_site.request_ids import request_id_for
 from research.hard_delete import hard_delete_user
 
 from .models import AuditLog, Role, User, UserRole
-from .roster_import import RosterWorkbookError, apply_import_plan, build_import_plan
+from .student_user_import import (
+    StudentAccountWorkbookError,
+    apply_student_account_import_plan,
+    build_student_account_import_plan,
+)
 
 
 class UserRoleInline(admin.TabularInline):
@@ -47,7 +51,7 @@ class StudentRosterImportForm(forms.Form):
     workbook = forms.FileField(
         label="系統名單 Excel 檔",
         help_text=(
-            "僅接受固定格式的 .xlsx；系統只讀取六個學生工作表，不會讀取教師名單。"
+            "僅接受 .xlsx；會掃描所有含有學生帳號表頭的工作表，不依工作表名稱判斷。"
         ),
     )
     confirm = forms.BooleanField(
@@ -59,7 +63,7 @@ class StudentRosterImportForm(forms.Form):
         filename = get_valid_filename(workbook.name or "")
         if not filename.lower().endswith(".xlsx"):
             raise forms.ValidationError("僅接受 .xlsx 格式的系統名單檔案。")
-        if workbook.size > settings.MAX_ROSTER_WORKBOOK_BYTES:
+        if workbook.size > settings.MAX_STUDENT_IMPORT_WORKBOOK_BYTES:
             raise forms.ValidationError("系統名單檔案超過允許的大小。")
         return workbook
 
@@ -111,12 +115,16 @@ class UserAdmin(DjangoUserAdmin):
                         temporary_file.write(chunk)
                     temporary_file.flush()
                     try:
-                        plan = build_import_plan(
+                        plan = build_student_account_import_plan(
                             temporary_file.name,
                             source=source_name,
                         )
-                        results = apply_import_plan(plan, actor=request.user)
-                    except RosterWorkbookError as exc:
+                        results = apply_student_account_import_plan(
+                            plan,
+                            actor=request.user,
+                            request_id=request_id_for(request),
+                        )
+                    except StudentAccountWorkbookError as exc:
                         form.add_error("workbook", str(exc))
                     else:
                         self.message_user(

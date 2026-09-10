@@ -18,6 +18,10 @@ from accounts.roster_import import (
     apply_import_plan,
     build_import_plan,
 )
+from accounts.student_user_import import (
+    apply_student_account_import_plan,
+    build_student_account_import_plan,
+)
 from professors.models import Professor
 
 
@@ -34,6 +38,22 @@ class SystemRosterImportTests(TestCase):
             sheet = workbook.create_sheet(sheet_name)
             sheet.append(HEADERS)
             for row in (rows_by_sheet or {}).get(sheet_name, []):
+                sheet.append(row)
+        temp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        temp.close()
+        path = Path(temp.name)
+        workbook.save(path)
+        self.addCleanup(path.unlink, missing_ok=True)
+        return path
+
+    def _write_generic_user_workbook(self, sheets: dict[str, list[tuple]]) -> Path:
+        workbook = Workbook()
+        first = workbook.active
+        first.title = next(iter(sheets))
+        for index, (sheet_name, rows) in enumerate(sheets.items()):
+            sheet = first if index == 0 else workbook.create_sheet(sheet_name)
+            sheet.append(HEADERS)
+            for row in rows:
                 sheet.append(row)
         temp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         temp.close()
@@ -171,8 +191,8 @@ class SystemRosterImportTests(TestCase):
             email="roster-admin@example.test",
             password="admin-password",
         )
-        path = self._write_workbook(
-            {"金企二甲": [self._student_row(password="new-student-password")]}
+        path = self._write_generic_user_workbook(
+            {"任意新增工作表": [self._student_row(password="new-student-password")]}
         )
         self.client.force_login(administrator)
 
@@ -199,4 +219,33 @@ class SystemRosterImportTests(TestCase):
         self.assertTrue(user.check_password("new-student-password"))
         self.assertTrue(user.has_platform_role("student"))
         self.assertTrue(user.groups.filter(name="student").exists())
+        self.assertEqual(StudentRoster.objects.count(), 0)
         self.assertEqual(Professor.objects.count(), 0)
+
+    def test_generic_user_import_scans_any_sheet_and_ignores_non_students(self):
+        path = self._write_generic_user_workbook(
+            {
+                "九月新增": [self._student_row()],
+                "其他人員": [
+                    (
+                        1,
+                        "教師甲",
+                        "teacher@example.edu.tw",
+                        "T001",
+                        "teacher",
+                        "任意單位",
+                        "not-used",
+                        "teacher",
+                    )
+                ],
+            }
+        )
+
+        plan = build_student_account_import_plan(path)
+        result = apply_student_account_import_plan(plan)
+
+        self.assertEqual(len(plan.rows), 1)
+        self.assertEqual(plan.rows[0].sheet_name, "九月新增")
+        self.assertEqual(result["created_users"], 1)
+        self.assertEqual(StudentRoster.objects.count(), 0)
+        self.assertFalse(User.objects.filter(email="teacher@example.edu.tw").exists())

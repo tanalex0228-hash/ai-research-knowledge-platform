@@ -147,8 +147,8 @@ STORAGES = {
 MEDIA_URL = "/protected-media/"
 MEDIA_ROOT = Path(os.getenv("FILE_STORAGE_PATH", PROJECT_ROOT / "data" / "media"))
 MAX_PDF_UPLOAD_BYTES = int(os.getenv("MAX_PDF_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-MAX_ROSTER_WORKBOOK_BYTES = int(
-    os.getenv("MAX_ROSTER_WORKBOOK_BYTES", str(10 * 1024 * 1024))
+MAX_STUDENT_IMPORT_WORKBOOK_BYTES = int(
+    os.getenv("MAX_STUDENT_IMPORT_WORKBOOK_BYTES", str(10 * 1024 * 1024))
 )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
