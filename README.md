@@ -270,6 +270,16 @@ prefer archive/deactivate workflows.
 
 ## Three-tier production baseline
 
+### Shared HTTPS path deployment
+
+The production platform may be mounted at
+`/faib-fju-students-work-exibition-platform/` on the shared `fin-web` HTTPS
+hostname. Set `DJANGO_FORCE_SCRIPT_NAME` to that exact path in the application
+environment, then use `deploy/fin-web/ai-research-nginx.conf` for the isolated
+edge proxy route. The corresponding Tailscale Funnel handler must use the same
+path. This route does not replace the shared host root or its other path
+handlers.
+
 - `fin-web`: public Nginx/TLS ingress and collected static assets
 - `fin-app`: Django/Gunicorn, Celery, Redis, application logs, private uploads, and environment secrets
 - `fin-db`: PostgreSQL/pgvector and backups

@@ -128,7 +128,15 @@ TIME_ZONE = "Asia/Taipei"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "/static/"
+APP_PATH_PREFIX = os.getenv("DJANGO_FORCE_SCRIPT_NAME", "").strip().rstrip("/")
+if APP_PATH_PREFIX and not APP_PATH_PREFIX.startswith("/"):
+    raise ImproperlyConfigured("DJANGO_FORCE_SCRIPT_NAME must start with '/'.")
+
+# The platform can be mounted below a shared HTTPS hostname without taking over
+# another application at the same host.  Django uses FORCE_SCRIPT_NAME for all
+# reversed URLs; static files must use the same prefix as well.
+FORCE_SCRIPT_NAME = APP_PATH_PREFIX or None
+STATIC_URL = f"{APP_PATH_PREFIX}/static/" if APP_PATH_PREFIX else "/static/"
 STATIC_ROOT = PROJECT_ROOT / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
@@ -144,7 +152,11 @@ STORAGES = {
 
 # Files are served only through the permission-checked download view. Do not map
 # this URL to MEDIA_ROOT in Nginx.
-MEDIA_URL = "/protected-media/"
+MEDIA_URL = (
+    f"{APP_PATH_PREFIX}/protected-media/"
+    if APP_PATH_PREFIX
+    else "/protected-media/"
+)
 MEDIA_ROOT = Path(os.getenv("FILE_STORAGE_PATH", PROJECT_ROOT / "data" / "media"))
 MAX_PDF_UPLOAD_BYTES = int(os.getenv("MAX_PDF_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 MAX_STUDENT_IMPORT_WORKBOOK_BYTES = int(
@@ -154,7 +166,7 @@ MAX_STUDENT_IMPORT_WORKBOOK_BYTES = int(
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
-LOGIN_URL = "/admin/login/"
+LOGIN_URL = f"{APP_PATH_PREFIX}/auth/" if APP_PATH_PREFIX else "/admin/login/"
 LOGIN_REDIRECT_URL = "/profile/"
 LOGOUT_REDIRECT_URL = "/"
 
