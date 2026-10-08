@@ -4,25 +4,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="AI 師生研究知識平台：探索教師、研究作品、方法與領域。">
+  <meta name="description" content="輔仁大學金融與國際企業學系師生專題成果研究平台：探索教師、研究作品、方法與領域。">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>{% block title %}AI 師生研究知識平台{% endblock %}</title>
+  <title>{% block title %}輔仁大學金融與國際企業學系｜師生專題成果研究平台{% endblock %}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="{% static 'public_site/site.css' %}" rel="stylesheet">
   {% block extra_head %}{% endblock %}
 </head>
-<body data-assistant-page-type="{% block assistant_page_type %}home{% endblock %}" data-assistant-object-id="{% block assistant_object_id %}{% endblock %}" data-assistant-search-query="{% block assistant_search_query %}{% endblock %}">
-  <nav class="navbar navbar-expand-lg navbar-dark research-nav" aria-label="主要導覽">
-    <div class="container">
-      <a class="navbar-brand fw-semibold" href="{% url 'public_site:home' %}">AI 師生研究知識平台</a>
+<body class="fju-platform" data-assistant-page-type="{% block assistant_page_type %}home{% endblock %}" data-assistant-object-id="{% block assistant_object_id %}{% endblock %}" data-assistant-search-query="{% block assistant_search_query %}{% endblock %}">
+  <a class="skip-link" href="#main-content">跳至主要內容</a>
+  <header class="site-header">
+  <nav class="navbar navbar-expand-lg navbar-dark site-bar" aria-label="主要導覽">
+    <div class="container-fluid">
+      <a class="navbar-brand site-brand" href="{% url 'public_site:home' %}">
+        <img src="{% static 'public_site/images/fju-emblem.jpg' %}" alt="輔仁大學校徽">
+        <span>輔仁大學金融與國際企業學系<small>師生專題成果研究平台</small></span>
+      </a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="切換導覽"><span class="navbar-toggler-icon"></span></button>
       <div class="collapse navbar-collapse" id="mainNav">
-        <ul class="navbar-nav ms-auto">
+        <ul class="navbar-nav ms-lg-4">
           <li class="nav-item"><a class="nav-link" href="{% url 'public_site:professor-list' %}">教師探索</a></li>
           <li class="nav-item"><a class="nav-link" href="{% url 'public_site:search' %}">研究搜尋</a></li>
+        </ul>
+        <ul class="navbar-nav ms-lg-auto account-tools">
           {% if request.user.is_staff %}<li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}">管理後台</a></li>{% endif %}
           {% if request.user.is_authenticated %}
-            <li class="nav-item"><a class="nav-link" href="{% url 'accounts:profile' %}"><span class="avatar-dot" aria-hidden="true"></span>{{ request.user.username }}</a></li>
+            <li class="nav-item"><a class="nav-link account-name" href="{% url 'accounts:profile' %}"><span class="avatar-dot" aria-hidden="true"></span>{{ request.user.username }}<small>帳號資料</small></a></li>
             <li class="nav-item">
               <form method="post" action="{% url 'accounts:logout' %}" class="d-inline">{% csrf_token %}<button class="nav-link btn btn-link" type="submit">登出</button></form>
             </li>
@@ -33,8 +40,9 @@
       </div>
     </div>
   </nav>
+  </header>
 
-  <main>{% block content %}{% endblock %}</main>
+  <main id="main-content" class="site-main" tabindex="-1">{% block content %}{% endblock %}</main>
 
   <button class="assistant-launcher" id="assistant-open-button" type="button" aria-label="開啟 AI 研究助理" aria-controls="assistant-drawer" aria-expanded="false">
     <span aria-hidden="true">AI</span><span class="d-none d-sm-inline">研究助理</span>
@@ -64,8 +72,9 @@
     </form>
   </section>
 
-  <footer class="border-top mt-5 py-4 text-secondary">
-    <div class="container small">平台內容依使用者權限顯示；公開頁面僅呈現已發布且允許公開的研究資料。</div>
+  <footer class="site-footer">
+    <div><strong>輔仁大學金融與國際企業學系</strong><span>師生專題成果研究平台</span></div>
+    <div><strong>FINANCE &amp; INTERNATIONAL BUSINESS</strong><span>平台內容依使用者權限顯示</span></div>
   </footer>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="{% static 'public_site/assistant.js' %}"></script>
