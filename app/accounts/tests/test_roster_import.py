@@ -249,3 +249,39 @@ class SystemRosterImportTests(TestCase):
         self.assertEqual(result["created_users"], 1)
         self.assertEqual(StudentRoster.objects.count(), 0)
         self.assertFalse(User.objects.filter(email="teacher@example.edu.tw").exists())
+
+    def test_generic_user_import_ignores_blank_or_non_student_group_value(self):
+        path = self._write_generic_user_workbook(
+            {
+                "任意工作表": [
+                    (
+                        1,
+                        "學生甲",
+                        "student-a@cloud.fju.edu.tw",
+                        "S001",
+                        "student",
+                        "任意單位",
+                        "temporary-password",
+                        "",
+                    ),
+                    (
+                        2,
+                        "學生乙",
+                        "student-b@cloud.fju.edu.tw",
+                        "S002",
+                        "student",
+                        "任意單位",
+                        "temporary-password",
+                        "自訂文字",
+                    ),
+                ]
+            }
+        )
+
+        result = apply_student_account_import_plan(build_student_account_import_plan(path))
+
+        self.assertEqual(result["created_users"], 2)
+        for email in ("student-a@cloud.fju.edu.tw", "student-b@cloud.fju.edu.tw"):
+            user = User.objects.get(email=email)
+            self.assertTrue(user.has_platform_role("student"))
+            self.assertTrue(user.groups.filter(name="student").exists())

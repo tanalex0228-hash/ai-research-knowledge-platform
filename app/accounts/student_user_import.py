@@ -25,7 +25,11 @@ from .models import Role, User, UserProfile, UserRole
 from .services import record_audit_event, validate_student_email_domain
 
 
-REQUIRED_COLUMNS = frozenset({"姓名", "帳號", "身份", "預設密碼", "權限群組"})
+# This importer creates *only* student accounts and always assigns the
+# platform student role and Django student group itself.  ``權限群組`` may be
+# present in a roster workbook for administrative reference, but it must not
+# make an otherwise valid student row fail to import.
+REQUIRED_COLUMNS = frozenset({"姓名", "帳號", "身份", "預設密碼"})
 
 
 @dataclass(frozen=True)
@@ -111,16 +115,12 @@ def build_student_account_import_plan(
             display_name = _cell_text(value_for("姓名"))
             email = User.objects.normalize_email(_cell_text(value_for("帳號")))
             password = _cell_text(value_for("預設密碼"))
-            group = _cell_text(value_for("權限群組")).casefold()
 
             # Empty template rows often retain spreadsheet formulas in other
             # columns.  Only an explicit student identity makes a row importable.
             if not identity:
                 continue
             if identity != "student":
-                continue
-            if group != "student":
-                errors.append(f"{worksheet.title}!{row_number}: 權限群組 must be student")
                 continue
             if not all((display_name, email, password)):
                 errors.append(
