@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -13,7 +14,7 @@ from django.utils import timezone
 
 from professors.models import Professor
 from public_site.permissions import visible_professors, visible_research_works
-from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
+from research.models import Award, FeaturedWork, ResearchWork, ResearchWorkType, WorkAdvisor, WorkField, WorkMethod
 from taxonomy.models import ResearchField, ResearchMethod, normalize_taxonomy_label
 
 from ai.models import AIRequestLog, AIRequestPurpose, AIRequestStatus, PromptVersion
@@ -30,8 +31,25 @@ RESEARCH_NAVIGATOR_PROMPT = """你是 AI 師生研究知識平台的浮動 AI Re
 4. 不能讀取或推測 PDF 私有內容；只能使用提供的頁面 context 與可見 metadata。
 5. 請以繁體中文回答，使用簡潔 Markdown。
 6. 每個推薦都要說明 WHY。
-7. 引用平台資料時使用 citation id，例如 [work:uuid]、[professor:uuid]、[field:slug]、[method:slug]。
+7. 只可根據提供的可見平台資料回答，不可補造資料、研究成果、教師經歷或研究結論。
+8. 使用者問的是概念、主題或方向時，若沒有完全相同的研究，仍可從已提供的相近研究、領域、方法或教師提出「相近切入」建議；必須清楚說明相近的原因，不可假稱為直接相關。
+9. 使用者問精選研究、最佳專題、大學部專題等分類時，應優先整理提供的精選、得獎或作品類型資料，不要一律回答資料不足。
+10. 回答中的作品、教師、領域與方法請使用可讀名稱。citation id、UUID、資料庫主鍵與內部欄位名稱僅供系統處理，絕不可輸出給使用者。
 """
+
+_INTERNAL_CITATION_TOKEN = re.compile(
+    r"\s*\[?(?:work|professor|field|method):[^\]\s]+\]?",
+    flags=re.IGNORECASE,
+)
+
+# These are exploration bridges, not claims that two topics are identical.  A
+# bridge only yields a recommendation when the expanded terms actually match
+# visible platform metadata.
+RELATED_EXPLORATION_TERMS = {
+    "地緣政治": ("國際", "供應鏈", "貿易", "匯率", "能源", "風險"),
+    "ai金融": ("人工智慧", "機器學習", "金融", "投資", "預測"),
+    "永續": ("esg", "碳", "環境", "治理", "社會責任"),
+}
 
 
 class ResearchNavigatorProviderError(Exception):
@@ -63,19 +81,27 @@ class DeterministicResearchNavigatorProvider:
         if recommendations["fields"]:
             lines.append("\n## 可能相關研究領域")
             for item in recommendations["fields"][:5]:
-                lines.append(f"- {item['name']}：{item['why']} [{item['citation_id']}]")
+                lines.append(f"- {item['name']}：{item['why']}")
         if recommendations["methods"]:
             lines.append("\n## 可能適合的方法")
             for item in recommendations["methods"][:5]:
-                lines.append(f"- {item['name']}：{item['why']} [{item['citation_id']}]")
+                lines.append(f"- {item['name']}：{item['why']}")
         if recommendations["professors"]:
             lines.append("\n## 可優先了解的教師")
             for item in recommendations["professors"][:5]:
-                lines.append(f"- {item['name']}：{item['why']} [{item['citation_id']}]")
+                lines.append(f"- {item['name']}：{item['why']}")
         if recommendations["works"]:
             lines.append("\n## 建議先讀的研究作品")
             for item in recommendations["works"][:5]:
-                lines.append(f"- {item['title']}：{item['why']} [{item['citation_id']}]")
+                lines.append(f"- {item['title']}：{item['why']}")
+        if recommendations["featured"]:
+            lines.append("\n## 目前精選研究")
+            for item in recommendations["featured"][:5]:
+                lines.append(f"- {item['title']}：{item['why']}")
+        if recommendations["awards"]:
+            lines.append("\n## 最佳專題與得獎作品")
+            for item in recommendations["awards"][:5]:
+                lines.append(f"- {item['title']}：{item['why']}")
         lines.append("\n以上是研究探索建議，不代表老師一定收學生；建議再點進教師頁或研究作品頁確認細節。")
         return "\n".join(lines)
 
@@ -211,6 +237,7 @@ class ResearchNavigatorService:
                 markdown = DeterministicResearchNavigatorProvider().generate(
                     prompt_payload=prompt_payload
                 )
+            markdown = _INTERNAL_CITATION_TOKEN.sub("", markdown).strip()
             request_log.mark_succeeded(
                 {
                     "answer": markdown,
@@ -232,11 +259,11 @@ class ResearchNavigatorService:
     def _prompt_version(self) -> PromptVersion:
         prompt, _ = PromptVersion.objects.get_or_create(
             key="research-navigator",
-            version=1,
+            version=2,
             defaults={
                 "template": RESEARCH_NAVIGATOR_PROMPT,
                 "status": "active",
-                "schema_version": "research_navigator.v1",
+                "schema_version": "research_navigator.v2",
                 "output_schema": {"type": "object"},
             },
         )
@@ -270,6 +297,8 @@ class ResearchNavigatorService:
         page_context: dict[str, Any],
     ) -> dict[str, list[dict[str, Any]]]:
         terms = self._terms_for(question=question, page_context=page_context)
+        normalized_question = normalize_taxonomy_label(question)
+        is_surname_query = len(normalized_question) == 1 and "\u4e00" <= normalized_question <= "\u9fff"
         works = visible_research_works(user).with_catalog_relations()
         fields = ResearchField.objects.discoverable_to(user)
         methods = ResearchMethod.objects.discoverable_to(user)
@@ -317,7 +346,7 @@ class ResearchNavigatorService:
 
         work_items = []
         for work in works[:200]:
-            work_terms = [work.title, work.abstract]
+            work_terms = [work.title, work.abstract, work.work_type, work.get_work_type_display()]
             work_terms += [link.research_field.display_name for link in work.field_links.all()]
             work_terms += [link.research_method.display_name for link in work.method_links.all()]
             score = self._score_texts(terms, work_terms)
@@ -344,7 +373,10 @@ class ResearchNavigatorService:
             texts = [professor.display_name, professor.profile_summary]
             for work in related_works:
                 texts.extend([work.title, work.abstract])
-            score = self._score_texts(terms, texts)
+            score = self._score_texts(
+                terms,
+                [professor.display_name] if is_surname_query else texts,
+            )
             if score:
                 professor_items.append(
                     {
@@ -357,11 +389,56 @@ class ResearchNavigatorService:
                     }
                 )
 
+        featured_items = []
+        if any(term in normalized_question for term in ("精選", "推薦", "精選研究", "精選專題")):
+            for feature in FeaturedWork.objects.discoverable_to(user).select_related("research_work")[:6]:
+                work = feature.research_work
+                featured_items.append(
+                    {
+                        "id": str(work.id),
+                        "title": work.title,
+                        "why": feature.headline or feature.summary or "目前列為平台精選研究。",
+                        "citation_id": f"work:{work.id}",
+                    }
+                )
+
+        award_items = []
+        if any(term in normalized_question for term in ("專題", "最佳", "得獎", "獎項", "優良")):
+            for award in Award.objects.discoverable_to(user).select_related("research_work")[:6]:
+                award_items.append(
+                    {
+                        "id": str(award.research_work_id),
+                        "title": award.research_work.title,
+                        "why": f"{award.award_year} 年 {award.name}" + (
+                            f"（{award.category}）" if award.category else ""
+                        ),
+                        "citation_id": f"work:{award.research_work_id}",
+                    }
+                )
+
+        if any(term in normalized_question for term in ("大學部專題", "大學專題", "專題")):
+            existing_ids = {item["id"] for item in work_items}
+            for work in works.filter(work_type=ResearchWorkType.UNDERGRADUATE_PROJECT)[:6]:
+                if str(work.id) not in existing_ids:
+                    work_items.append(
+                        {
+                            "id": str(work.id),
+                            "title": work.title,
+                            "year": work.year,
+                            "score": 0.5,
+                            "why": "此作品屬於大學部專題，可作為題目規劃的參考。",
+                            "summary": _safe_text(work.abstract, limit=260),
+                            "citation_id": f"work:{work.id}",
+                        }
+                    )
+
         return {
             "fields": sorted(field_items, key=lambda item: item["score"], reverse=True)[:6],
             "methods": sorted(method_items, key=lambda item: item["score"], reverse=True)[:6],
             "works": sorted(work_items, key=lambda item: item["score"], reverse=True)[:6],
             "professors": sorted(professor_items, key=lambda item: item["score"], reverse=True)[:6],
+            "featured": featured_items,
+            "awards": award_items,
         }
 
     def build_citations(self, *, server_context: dict[str, Any], recommendations: dict[str, list[dict[str, Any]]]) -> list[dict[str, str]]:
@@ -417,8 +494,9 @@ class ResearchNavigatorService:
             "recommendations": recommendations,
             "citations": citations,
             "instruction": (
-                "Answer using only current_page, recommendations and citations. "
-                "If a professor, work, field, or method is not present here, say the platform has insufficient data."
+                "只使用 current_page、recommendations 與 citations 中可見的資料回答。"
+                "先區分直接相關與相近切入；若沒有完全相符但有相近項目，請具體推薦並說明重疊點。"
+                "若確實沒有可見資料才說資料不足。不可輸出 citation id、UUID、主鍵或內部欄位名稱。"
             ),
         }
 
@@ -497,9 +575,16 @@ class ResearchNavigatorService:
         terms: list[str] = []
         for value in values:
             normalized = normalize_taxonomy_label(str(value))
+            for concept, related_terms in RELATED_EXPLORATION_TERMS.items():
+                if concept in normalized:
+                    for related_term in (concept, *related_terms):
+                        if related_term not in terms:
+                            terms.append(related_term)
             for token in normalized.replace("，", " ").replace("、", " ").split():
                 if len(token) >= 2 and token not in terms:
                     terms.append(token)
+            if len(normalized) == 1 and "\u4e00" <= normalized <= "\u9fff" and normalized not in terms:
+                terms.append(normalized)
         return terms[:24]
 
     def _score_texts(self, terms: list[str], texts: list[str]) -> float:

@@ -36,6 +36,9 @@
 
   function escapeHtml(value) {
     return String(value || "")
+      // Older saved messages may predate the server-side citation cleanup.
+      // Keep internal identifiers available to the API but never render them.
+      .replace(/\s*\[?(?:work|professor|field|method):[^\]\s]+\]?/gi, "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -94,8 +97,7 @@
       .map((citation) => {
         const title = escapeHtml(citation.title || citation.id);
         const description = escapeHtml(citation.description || "");
-        const id = escapeHtml(citation.id || "");
-        return `<article class="assistant-citation"><strong>${title}</strong><span>${id}</span>${description ? `<p>${description}</p>` : ""}</article>`;
+        return `<article class="assistant-citation"><strong>${title}</strong>${description ? `<p>${description}</p>` : ""}</article>`;
       })
       .join("");
     return `<div class="assistant-citations" aria-label="引用來源">${cards}</div>`;

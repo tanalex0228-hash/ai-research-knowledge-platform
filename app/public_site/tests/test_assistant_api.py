@@ -6,10 +6,10 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import Role, User, UserRole
-from ai.models import AssistantMessage, AssistantSession, AssistantSessionStatus
+from ai.models import AssistantMessage, AssistantSession, AssistantSessionStatus, PromptVersion
 from ai.services.research_navigator import ResearchNavigatorService
 from professors.models import Professor
-from research.models import ResearchWork, WorkAdvisor, WorkField, WorkMethod
+from research.models import Award, FeaturedWork, ResearchWork, WorkAdvisor, WorkField, WorkMethod
 from taxonomy.models import ResearchField, ResearchMethod
 
 
@@ -71,6 +71,15 @@ class AssistantApiTests(TestCase):
             is_primary=True,
         )
         WorkMethod.objects.create(research_work=cls.work, research_method=cls.method)
+        FeaturedWork.objects.create(research_work=cls.work, headline="本月精選")
+        Award.objects.create(
+            research_work=cls.work,
+            advisor=cls.professor,
+            name="最佳專題",
+            award_type="best_project",
+            award_year=2026,
+            visibility_scope="public",
+        )
         cls.student = User.objects.create_user(
             username="assistant-student",
             email="assistant-student@example.edu",
@@ -257,6 +266,11 @@ class ResearchNavigatorServiceTests(TestCase):
         payload = provider.payloads[0]
         self.assertEqual(payload["current_page"]["research_work"]["title"], self.work.title)
         self.assertEqual(payload["current_user_question"], "請解釋這篇研究")
+        self.assertNotIn("work:test", result["answer"])
+        self.assertEqual(
+            PromptVersion.objects.get(key="research-navigator", version=2).status,
+            "active",
+        )
 
     def test_recommends_professor_work_field_and_method_from_visible_records(self):
         service = ResearchNavigatorService()
@@ -273,6 +287,32 @@ class ResearchNavigatorServiceTests(TestCase):
         self.assertEqual(recommendations["methods"][0]["name"], "LSTM")
         self.assertEqual(recommendations["works"][0]["title"], self.work.title)
         self.assertEqual(recommendations["professors"][0]["name"], self.professor.display_name)
+
+    def test_category_queries_offer_featured_awarded_and_undergraduate_work(self):
+        self.work.work_type = "undergraduate_project"
+        self.work.save(update_fields={"work_type"})
+        FeaturedWork.objects.create(research_work=self.work, headline="本月精選")
+        Award.objects.create(
+            research_work=self.work,
+            advisor=self.professor,
+            name="最佳專題",
+            award_type="best_project",
+            award_year=2026,
+            visibility_scope="public",
+        )
+        service = ResearchNavigatorService()
+
+        result = service.answer(
+            user=None,
+            question="我想了解精選專題與大學部專題",
+            page_context={"type": "home"},
+            conversation_history=[],
+        )
+
+        recommendations = result["recommendations"]
+        self.assertEqual(recommendations["featured"][0]["title"], self.work.title)
+        self.assertEqual(recommendations["awards"][0]["title"], self.work.title)
+        self.assertTrue(any(item["title"] == self.work.title for item in recommendations["works"]))
 
     def test_fallback_when_no_recommendation_exists(self):
         service = ResearchNavigatorService()
