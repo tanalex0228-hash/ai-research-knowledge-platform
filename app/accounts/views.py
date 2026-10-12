@@ -96,7 +96,7 @@ def logout_view(request):
         request_id=request_id_for(request),
     )
     logout(request)
-    return redirect("/")
+    return redirect("public_site:home")
 
 
 @require_http_methods(["GET", "POST"])

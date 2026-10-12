@@ -220,6 +220,22 @@ class PublicPageTests(PrivateStorageTestMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.student_work.title)
 
+    def test_assistant_urls_are_rendered_by_django(self):
+        response = self.client.get(reverse("public_site:home"))
+
+        self.assertContains(
+            response,
+            'data-assistant-session-url="/api/v1/ai/assistant/session"',
+        )
+        self.assertContains(
+            response,
+            'data-assistant-message-url="/api/v1/ai/assistant/messages"',
+        )
+        self.assertContains(
+            response,
+            'data-assistant-end-url="/api/v1/ai/assistant/end"',
+        )
+
     def test_download_is_permission_checked_and_filename_is_opaque(self):
         public_document = SourceDocument.objects.create(
             research_work=self.work,

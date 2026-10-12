@@ -13,6 +13,14 @@
     return;
   }
 
+  // URLs come from Django rather than root-relative literals.  This preserves
+  // the shared-host mount prefix in production while retaining local paths.
+  const endpoints = {
+    session: drawer.dataset.assistantSessionUrl || "/api/v1/ai/assistant/session",
+    message: drawer.dataset.assistantMessageUrl || "/api/v1/ai/assistant/messages",
+    end: drawer.dataset.assistantEndUrl || "/api/v1/ai/assistant/end",
+  };
+
   let loaded = false;
   let submitting = false;
 
@@ -161,7 +169,7 @@
     }
     loaded = true;
     try {
-      const payload = await fetchJson("/api/v1/ai/assistant/session", { method: "GET" });
+      const payload = await fetchJson(endpoints.session, { method: "GET" });
       replaceMessages(payload.data.messages || []);
     } catch (error) {
       replaceMessages([
@@ -203,7 +211,7 @@
     appendMessage({ role: "user", content: text, citations: [] });
     setLoading(true);
     try {
-      const payload = await fetchJson("/api/v1/ai/assistant/messages", {
+      const payload = await fetchJson(endpoints.message, {
         method: "POST",
         body: JSON.stringify({ message: text, page_context: pageContext() }),
       });
@@ -226,7 +234,7 @@
     }
     setLoading(true);
     try {
-      await fetchJson("/api/v1/ai/assistant/end", {
+      await fetchJson(endpoints.end, {
         method: "POST",
         body: JSON.stringify({}),
       });

@@ -48,7 +48,10 @@
     <span aria-hidden="true">AI</span><span class="d-none d-sm-inline">研究助理</span>
   </button>
 
-  <section class="assistant-drawer" id="assistant-drawer" role="dialog" aria-modal="false" aria-label="AI 研究助理" aria-hidden="true" hidden>
+  <section class="assistant-drawer" id="assistant-drawer" role="dialog" aria-modal="false" aria-label="AI 研究助理" aria-hidden="true" hidden
+    data-assistant-session-url="{% url 'api-v1:assistant-session' %}"
+    data-assistant-message-url="{% url 'api-v1:assistant-message' %}"
+    data-assistant-end-url="{% url 'api-v1:assistant-end' %}">
     <div class="assistant-drawer__header">
       <div>
         <p class="assistant-drawer__eyebrow">研究導航</p>

@@ -167,8 +167,23 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 LOGIN_URL = f"{APP_PATH_PREFIX}/auth/" if APP_PATH_PREFIX else "/admin/login/"
-LOGIN_REDIRECT_URL = "/profile/"
-LOGOUT_REDIRECT_URL = "/"
+LOGIN_REDIRECT_URL = f"{APP_PATH_PREFIX}/profile/" if APP_PATH_PREFIX else "/profile/"
+LOGOUT_REDIRECT_URL = f"{APP_PATH_PREFIX}/" if APP_PATH_PREFIX else "/"
+
+# This platform is mounted below a shared hostname in production.  Keep its
+# authentication cookies out of the host-wide cookie namespace so a separate
+# project hosted at ``/`` cannot replace this platform's login or CSRF token.
+_default_cookie_path = f"{APP_PATH_PREFIX}/" if APP_PATH_PREFIX else "/"
+SESSION_COOKIE_NAME = os.getenv(
+    "DJANGO_SESSION_COOKIE_NAME",
+    "faib_research_sessionid" if APP_PATH_PREFIX else "sessionid",
+)
+SESSION_COOKIE_PATH = os.getenv("DJANGO_SESSION_COOKIE_PATH", _default_cookie_path)
+CSRF_COOKIE_NAME = os.getenv(
+    "DJANGO_CSRF_COOKIE_NAME",
+    "faib_research_csrftoken" if APP_PATH_PREFIX else "csrftoken",
+)
+CSRF_COOKIE_PATH = os.getenv("DJANGO_CSRF_COOKIE_PATH", _default_cookie_path)
 
 PRIMARY_DEPARTMENT_CODE = os.getenv("PRIMARY_DEPARTMENT_CODE", "FIN")
 STUDENT_EMAIL_DOMAIN_ALLOWLIST = env_list(
