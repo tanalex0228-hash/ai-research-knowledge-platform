@@ -2,19 +2,12 @@ from django.contrib import admin
 from django.contrib import messages
 from django import forms
 from django.contrib.admin import helpers
-from django.core.exceptions import PermissionDenied
 from django.db import router, transaction
 from django.template.response import TemplateResponse
 
-from accounts.permissions import (
-    is_platform_admin,
-    is_platform_teacher,
-    visible_scopes_for,
-)
 from accounts.services import record_audit_event
 from public_site.request_ids import request_id_for
 from research.hard_delete import hard_delete_source_documents
-from research.models import ResearchWork
 
 from .choices import VisibilityScope
 from .forms import DocumentChunkAdminForm, SourceDocumentUploadForm
@@ -29,21 +22,6 @@ class SourceDocumentVisibilityForm(forms.Form):
             "只會變更選取原始文件的下載／預覽權限；不會修改研究成果、"
             "檔案內容、文件段落或擷取結果。"
         ),
-    )
-
-
-def _advised_works_for(user):
-    if not is_platform_teacher(user):
-        return ResearchWork.objects.none()
-    return (
-        ResearchWork.objects.filter(
-            advisor_links__professor__user=user,
-            advisor_links__professor__status="active",
-            advisor_links__professor__visibility_scope__in=visible_scopes_for(user),
-            visibility_scope__in=visible_scopes_for(user),
-        )
-        .exclude(status__in=("archived", "rejected"))
-        .distinct()
     )
 
 
@@ -134,37 +112,12 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         ),
     )
 
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or is_platform_teacher(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        if is_platform_admin(request.user):
-            return True
-        if not is_platform_teacher(request.user):
-            return False
-        return obj is None or self._teacher_advises_document(request.user, obj)
-
-    def has_add_permission(self, request):
-        if is_platform_admin(request.user):
-            return True
-        return _advised_works_for(request.user).exists()
-
-    def has_change_permission(self, request, obj=None):
-        if is_platform_admin(request.user):
-            return True
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
     def _can_hard_delete(self, request) -> bool:
-        return is_platform_admin(request.user) and request.user.has_perm(
-            "documents.hard_delete_sourcedocument"
-        )
+        return request.user.has_perm("documents.hard_delete_sourcedocument")
 
     def get_actions(self, request):
         actions = super().get_actions(request)
-        if not is_platform_admin(request.user):
+        if not request.user.has_perm("documents.change_sourcedocument"):
             actions.pop("set_selected_visibility", None)
         if not self._can_hard_delete(request):
             actions.pop("hard_delete_selected_source_documents", None)
@@ -190,47 +143,6 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     def hard_delete_selected_source_documents(self, request, queryset):
         self.delete_queryset(request, queryset)
 
-    @staticmethod
-    def _teacher_advises_document(user, obj) -> bool:
-        return (
-            obj.visibility_scope in visible_scopes_for(user)
-            and _advised_works_for(user).filter(pk=obj.research_work_id).exists()
-        )
-
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        if is_platform_teacher(request.user):
-            return queryset.filter(
-                research_work__advisor_links__professor__user=request.user,
-                research_work__advisor_links__professor__status="active",
-                research_work__advisor_links__professor__visibility_scope__in=visible_scopes_for(
-                    request.user
-                ),
-                research_work__visibility_scope__in=visible_scopes_for(request.user),
-                visibility_scope__in=visible_scopes_for(request.user),
-            ).distinct()
-        return queryset.none()
-
-
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "research_work" and not is_platform_admin(request.user):
-            kwargs["queryset"] = _advised_works_for(request.user)
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
-
-    def formfield_for_choice_field(self, db_field, request, **kwargs):
-        if (
-            db_field.name == "visibility_scope"
-            and is_platform_teacher(request.user)
-            and not is_platform_admin(request.user)
-        ):
-            kwargs["choices"] = (
-                (VisibilityScope.TEACHER, VisibilityScope.TEACHER.label),
-            )
-        return super().formfield_for_choice_field(db_field, request, **kwargs)
-
     def get_readonly_fields(self, request, obj=None):
         fields = tuple(super().get_readonly_fields(request, obj)) + ("uploaded_by",)
         if obj is not None:
@@ -238,15 +150,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         return tuple(dict.fromkeys(fields))
 
     def save_model(self, request, obj, form, change):
-        if is_platform_teacher(request.user) and not is_platform_admin(request.user):
-            if not self._teacher_advises_document(request.user, obj):
-                raise PermissionDenied(
-                    "Teachers may manage documents only for research works they advise."
-                )
-            if not change:
-                obj.uploaded_by = request.user
-            obj.visibility_scope = VisibilityScope.TEACHER
-        elif not change:
+        if not change:
             obj.uploaded_by = request.user
 
         file_changed = not change or bool(
@@ -314,7 +218,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     @admin.action(description="批量設定原始文件可見性範圍")
     def set_selected_visibility(self, request, queryset):
-        if not is_platform_admin(request.user):
+        if not request.user.has_perm("documents.change_sourcedocument"):
             self.message_user(request, "您沒有批量設定文件可見性的權限。", messages.ERROR)
             return None
 
@@ -383,51 +287,6 @@ class DocumentChunkAdmin(admin.ModelAdmin):
     raw_id_fields = ("source_document",)
     readonly_fields = ("id", "created_at", "updated_at")
 
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or is_platform_teacher(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        if is_platform_admin(request.user):
-            return True
-        if not is_platform_teacher(request.user):
-            return False
-        return obj is None or (
-            obj.visibility_scope in visible_scopes_for(request.user)
-            and obj.source_document.visibility_scope in visible_scopes_for(request.user)
-            and _advised_works_for(request.user)
-            .filter(pk=obj.source_document.research_work_id)
-            .exists()
-        )
-
-    def has_add_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        if is_platform_teacher(request.user):
-            return queryset.filter(
-                source_document__research_work__advisor_links__professor__user=request.user,
-                source_document__research_work__advisor_links__professor__status="active",
-                source_document__research_work__advisor_links__professor__visibility_scope__in=visible_scopes_for(
-                    request.user
-                ),
-                source_document__research_work__visibility_scope__in=visible_scopes_for(
-                    request.user
-                ),
-                source_document__visibility_scope__in=visible_scopes_for(request.user),
-                visibility_scope__in=visible_scopes_for(request.user),
-            ).distinct()
-        return queryset.none()
-
-
 class SourceDocumentInline(admin.TabularInline):
     model = SourceDocument
     extra = 0
@@ -444,10 +303,10 @@ class SourceDocumentInline(admin.TabularInline):
     stored_file_link.short_description = "檔案連結"
 
     def has_add_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
+        return request.user.has_perm("documents.add_sourcedocument")
 
     def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
+        return request.user.has_perm("documents.change_sourcedocument")
 
     def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
+        return request.user.has_perm("documents.delete_sourcedocument")

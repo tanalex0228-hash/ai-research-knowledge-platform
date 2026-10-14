@@ -1,21 +1,21 @@
 from django.contrib.admin.sites import AdminSite
-from django.contrib.messages.storage.fallback import FallbackStorage
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TestCase
 
-from accounts.models import Role, User, UserRole
-from professors.models import Professor
+from accounts.models import User
 from research.admin import (
     ResearchWorkAdmin,
+    ResearchWorkTransitionAdmin,
     StudentAdmin,
     WorkAdvisorAdmin,
-    WorkAdvisorInline,
     WorkAuthorAdmin,
     WorkFieldAdmin,
     WorkMethodAdmin,
 )
 from research.models import (
     ResearchWork,
-    ResearchWorkStatus,
+    ResearchWorkTransition,
     ResearchWorkType,
     Student,
     WorkAdvisor,
@@ -23,326 +23,87 @@ from research.models import (
     WorkField,
     WorkMethod,
 )
-from taxonomy.models import ResearchField, ResearchMethod
 
 
-class ResearchWorkAdminObjectPermissionTests(TestCase):
+class ResearchAdminGroupPermissionTests(TestCase):
+    """Research administration follows normal Django group permissions."""
+
     def setUp(self):
+        self.site = AdminSite()
         self.factory = RequestFactory()
-        self.admin_site = AdminSite()
-        self.model_admin = ResearchWorkAdmin(ResearchWork, self.admin_site)
-        self.advisor_inline = WorkAdvisorInline(ResearchWork, self.admin_site)
-        self.advisor_admin = WorkAdvisorAdmin(WorkAdvisor, self.admin_site)
-        self.author_admin = WorkAuthorAdmin(WorkAuthor, self.admin_site)
-        self.field_admin = WorkFieldAdmin(WorkField, self.admin_site)
-        self.method_admin = WorkMethodAdmin(WorkMethod, self.admin_site)
-        self.student_admin = StudentAdmin(Student, self.admin_site)
-        teacher_role = Role.objects.get(slug="teacher")
-        admin_role = Role.objects.get(slug="admin")
-
-        self.teacher = User.objects.create_user(
-            username="research-teacher",
-            email="research-teacher@example.test",
-            is_staff=True,
+        self.group = Group.objects.create(name="Lab_Member")
+        self.user = User.objects.create_user(
+            username="lab-member", email="lab-member@example.test", is_staff=True
         )
-        UserRole.objects.create(user=self.teacher, role=teacher_role)
-        self.professor = Professor.objects.create(
-            user=self.teacher,
-            display_name="Research Teacher",
-        )
-
-        self.other_teacher = User.objects.create_user(
-            username="other-research-teacher",
-            email="other-research-teacher@example.test",
-            is_staff=True,
-        )
-        UserRole.objects.create(user=self.other_teacher, role=teacher_role)
-        self.other_professor = Professor.objects.create(
-            user=self.other_teacher,
-            display_name="Other Research Teacher",
-        )
-
-        self.own_work = self.make_work("Own advised work")
-        self.other_work = self.make_work("Other advised work")
-        self.shared_work = self.make_work("Shared advised work")
-        WorkAdvisor.objects.create(research_work=self.own_work, professor=self.professor)
-        WorkAdvisor.objects.create(
-            research_work=self.other_work,
-            professor=self.other_professor,
-        )
-        WorkAdvisor.objects.create(research_work=self.shared_work, professor=self.professor)
-        WorkAdvisor.objects.create(
-            research_work=self.shared_work,
-            professor=self.other_professor,
-            position=2,
-        )
-
-        self.admin_user = User.objects.create_user(
-            username="research-admin",
-            email="research-admin@example.test",
-            is_staff=True,
-        )
-        UserRole.objects.create(user=self.admin_user, role=admin_role)
-        self.unlinked_teacher = User.objects.create_user(
-            username="unlinked-teacher",
-            email="unlinked-teacher@example.test",
-            is_staff=True,
-        )
-        UserRole.objects.create(user=self.unlinked_teacher, role=teacher_role)
-
-    @staticmethod
-    def make_work(title):
-        return ResearchWork.objects.create(
+        self.user.groups.add(self.group)
+        self.work = ResearchWork.objects.create(
             work_type=ResearchWorkType.UNDERGRADUATE_PROJECT,
-            title=title,
+            title="A work not linked to this user",
             year=2026,
         )
 
-    def request_for(self, user):
-        request = self.factory.get("/admin/research/researchwork/")
-        request.user = user
+    def grant(self, model, *actions):
+        content_type = ContentType.objects.get_for_model(model)
+        self.group.permissions.add(
+            *Permission.objects.filter(
+                content_type=content_type,
+                codename__in=[f"{action}_{model._meta.model_name}" for action in actions],
+            )
+        )
+        self.user = User.objects.get(pk=self.user.pk)
+
+    def request(self):
+        request = self.factory.get("/admin/research/")
+        request.user = self.user
         return request
 
-    def test_teacher_only_lists_views_and_changes_advised_works(self):
-        request = self.request_for(self.teacher)
-        self.assertQuerySetEqual(
-            self.model_admin.get_queryset(request),
-            [self.own_work, self.shared_work],
-            ordered=False,
-        )
-        self.assertTrue(self.model_admin.has_view_permission(request, self.own_work))
-        self.assertTrue(self.model_admin.has_change_permission(request, self.shared_work))
-        self.assertFalse(self.model_admin.has_view_permission(request, self.other_work))
-        self.assertFalse(self.model_admin.has_change_permission(request, self.other_work))
-        self.assertFalse(self.model_admin.has_add_permission(request))
-        self.assertFalse(self.model_admin.has_delete_permission(request, self.own_work))
+    def test_research_work_crud_is_granted_by_group_without_professor_link(self):
+        self.grant(ResearchWork, "view", "add", "change", "delete")
+        model_admin = ResearchWorkAdmin(ResearchWork, self.site)
+        request = self.request()
 
-        readonly = self.model_admin.get_readonly_fields(request, self.own_work)
-        self.assertIn("status", readonly)
-        self.assertIn("visibility_scope", readonly)
-        self.assertIn("created_by", readonly)
-        self.assertIn("updated_by", readonly)
-        self.assertFalse(self.model_admin.get_actions(request))
+        self.assertIn(self.work, model_admin.get_queryset(request))
+        self.assertTrue(model_admin.has_module_permission(request))
+        self.assertTrue(model_admin.has_view_permission(request, self.work))
+        self.assertTrue(model_admin.has_add_permission(request))
+        self.assertTrue(model_admin.has_change_permission(request, self.work))
+        self.assertTrue(model_admin.has_delete_permission(request, self.work))
 
-    def test_admin_role_retains_all_works_and_lifecycle_actions(self):
-        request = self.request_for(self.admin_user)
-        self.assertEqual(self.model_admin.get_queryset(request).count(), 3)
-        self.assertTrue(self.model_admin.has_change_permission(request, self.other_work))
-        self.assertTrue(self.model_admin.has_add_permission(request))
-        self.assertTrue(self.model_admin.has_delete_permission(request, self.other_work))
-        self.assertIn("transition_to_approved", self.model_admin.get_actions(request))
-        self.assertNotIn("approve_all_ai_candidates_and_publish", self.model_admin.get_actions(request))
-        self.assertIn(
-            "status", self.model_admin.get_readonly_fields(request, self.own_work)
-        )
-        self.assertIn("status", self.model_admin.get_readonly_fields(request, None))
+    def test_relationship_and_student_crud_are_granted_by_model_permissions(self):
+        for model in (Student, WorkAuthor, WorkAdvisor, WorkField, WorkMethod):
+            self.grant(model, "view", "add", "change", "delete")
 
-    def test_admin_can_set_selected_student_visibility_in_bulk(self):
-        student = Student.objects.create(display_name="Visibility Student")
-        request = self.factory.post(
-            "/admin/research/student/",
-            {"apply": "1", "visibility_scope": "student"},
-        )
-        request.user = self.admin_user
-        request.request_id = "student-visibility-request-1"
-        request.session = {}
-        request._messages = FallbackStorage(request)
-
-        response = self.student_admin.set_selected_visibility(
-            request,
-            Student.objects.filter(pk=student.pk),
-        )
-
-        self.assertIsNone(response)
-        student.refresh_from_db()
-        self.assertEqual(student.visibility_scope, "student")
-
-    def test_admin_lifecycle_action_uses_service_and_writes_audit(self):
-        request = self.factory.post(
-            "/admin/research/researchwork/",
-            HTTP_X_REQUEST_ID="admin-transition-request-1",
-        )
-        request.user = self.admin_user
-        request.request_id = "middleware-transition-request-1"
-        request.session = {}
-        request._messages = FallbackStorage(request)
-
-        self.model_admin.transition_to_approved(
-            request,
-            ResearchWork.objects.filter(pk=self.own_work.pk),
-        )
-
-        self.own_work.refresh_from_db()
-        self.assertEqual(self.own_work.status, ResearchWorkStatus.APPROVED)
-        transition = self.own_work.transitions.get()
-        self.assertEqual(transition.actor, self.admin_user)
-        self.assertEqual(transition.request_id, "middleware-transition-request-1")
-        self.assertIn("Django admin action", transition.reason)
-
-    def test_unlinked_teacher_has_no_research_work_admin_access(self):
-        request = self.request_for(self.unlinked_teacher)
-        self.assertFalse(self.model_admin.get_queryset(request).exists())
-        self.assertFalse(self.model_admin.has_module_permission(request))
-        self.assertFalse(self.model_admin.has_view_permission(request, self.own_work))
-
-    def test_teacher_cannot_change_or_remove_advisor_ownership(self):
-        request = self.request_for(self.teacher)
-        own_link = WorkAdvisor.objects.get(
-            research_work=self.own_work,
-            professor=self.professor,
-        )
-        other_link = WorkAdvisor.objects.get(
-            research_work=self.other_work,
-            professor=self.other_professor,
-        )
-
-        self.assertTrue(self.advisor_inline.has_view_permission(request, self.own_work))
-        self.assertFalse(
-            self.advisor_inline.has_view_permission(request, self.other_work)
-        )
-        self.assertFalse(
-            self.advisor_inline.has_change_permission(request, self.own_work)
-        )
-        self.assertFalse(self.advisor_inline.has_add_permission(request, self.own_work))
-        self.assertFalse(
-            self.advisor_inline.has_delete_permission(request, self.own_work)
-        )
-
-        self.assertQuerySetEqual(
-            self.advisor_admin.get_queryset(request),
-            list(WorkAdvisor.objects.filter(professor=self.professor)),
-            ordered=False,
-        )
-        self.assertTrue(self.advisor_admin.has_view_permission(request, own_link))
-        self.assertFalse(self.advisor_admin.has_view_permission(request, other_link))
-        self.assertFalse(self.advisor_admin.has_change_permission(request, own_link))
-        self.assertFalse(self.advisor_admin.has_delete_permission(request, own_link))
-
-        admin_request = self.request_for(self.admin_user)
-        self.assertTrue(
-            self.advisor_inline.has_change_permission(admin_request, self.own_work)
-        )
-        self.assertTrue(self.advisor_admin.has_change_permission(admin_request, own_link))
-
-    def test_standalone_relationship_admins_fail_closed_for_teachers(self):
-        student = Student.objects.create(display_name="Relationship Student")
-        field = ResearchField.objects.create(
-            slug="relationship-field",
-            display_name="Relationship Field",
-        )
-        method = ResearchMethod.objects.create(
-            slug="relationship-method",
-            display_name="Relationship Method",
-        )
-        own_objects = (
-            WorkAuthor.objects.create(research_work=self.own_work, student=student),
-            WorkField.objects.create(
-                research_work=self.own_work,
-                research_field=field,
-            ),
-            WorkMethod.objects.create(
-                research_work=self.own_work,
-                research_method=method,
-            ),
-        )
-        other_student = Student.objects.create(display_name="Other Relationship Student")
-        other_field = ResearchField.objects.create(
-            slug="other-relationship-field",
-            display_name="Other Relationship Field",
-        )
-        other_method = ResearchMethod.objects.create(
-            slug="other-relationship-method",
-            display_name="Other Relationship Method",
-        )
-        other_objects = (
-            WorkAuthor.objects.create(
-                research_work=self.other_work,
-                student=other_student,
-            ),
-            WorkField.objects.create(
-                research_work=self.other_work,
-                research_field=other_field,
-            ),
-            WorkMethod.objects.create(
-                research_work=self.other_work,
-                research_method=other_method,
-            ),
-        )
-
-        teacher_request = self.request_for(self.teacher)
-        admin_request = self.request_for(self.admin_user)
-        self.assertFalse(self.author_admin.has_module_permission(teacher_request))
-        self.assertFalse(self.author_admin.get_queryset(teacher_request).exists())
-        self.assertFalse(
-            self.author_admin.has_view_permission(teacher_request, own_objects[0])
-        )
-        self.assertTrue(
-            self.author_admin.has_change_permission(admin_request, other_objects[0])
-        )
-
-        for model_admin, own_object, other_object in zip(
-            (self.field_admin, self.method_admin),
-            own_objects[1:],
-            other_objects[1:],
+        request = self.request()
+        for model, admin_class in (
+            (Student, StudentAdmin),
+            (WorkAuthor, WorkAuthorAdmin),
+            (WorkAdvisor, WorkAdvisorAdmin),
+            (WorkField, WorkFieldAdmin),
+            (WorkMethod, WorkMethodAdmin),
         ):
-            with self.subTest(model_admin=model_admin.__class__.__name__):
-                self.assertFalse(model_admin.has_module_permission(teacher_request))
-                self.assertNotIn(own_object, model_admin.get_queryset(teacher_request))
-                self.assertNotIn(other_object, model_admin.get_queryset(teacher_request))
-                self.assertFalse(
-                    model_admin.has_view_permission(teacher_request, own_object)
-                )
-                self.assertFalse(
-                    model_admin.has_view_permission(teacher_request, other_object)
-                )
-                self.assertFalse(
-                    model_admin.has_change_permission(teacher_request, own_object)
-                )
-                self.assertFalse(model_admin.has_add_permission(teacher_request))
-                self.assertFalse(
-                    model_admin.has_delete_permission(teacher_request, own_object)
-                )
-                self.assertTrue(
-                    model_admin.has_change_permission(admin_request, other_object)
-                )
+            with self.subTest(model=model.__name__):
+                model_admin = admin_class(model, self.site)
+                self.assertTrue(model_admin.has_module_permission(request))
+                self.assertTrue(model_admin.has_add_permission(request))
+                self.assertTrue(model_admin.has_change_permission(request))
+                self.assertTrue(model_admin.has_delete_permission(request))
 
-    def test_admin_can_select_an_existing_student_user_as_work_author(self):
-        student_user = User.objects.create_user(
-            username="roster-student",
-            email="roster-student@example.test",
-        )
-        UserRole.objects.create(
-            user=student_user,
-            role=Role.objects.get(slug="student"),
-        )
-        request = self.request_for(self.admin_user)
-        form_class = self.author_admin.get_form(request)
-        form = form_class(
-            data={
-                "research_work": str(self.own_work.id),
-                "user": str(student_user.id),
-                "position": 1,
-            }
-        )
+    def test_lab_member_cannot_use_publication_or_review_governance_actions(self):
+        self.grant(ResearchWork, "view", "change")
+        model_admin = ResearchWorkAdmin(ResearchWork, self.site)
+        actions = model_admin.get_actions(self.request())
 
-        self.assertTrue(form.is_valid(), form.errors)
-        author = form.save()
-        self.assertEqual(author.user, student_user)
-        self.assertEqual(author.student.user, student_user)
+        self.assertNotIn("transition_to_approved", actions)
+        self.assertNotIn("transition_to_published", actions)
+        self.assertNotIn("rerun_extraction_pipeline", actions)
+        self.assertNotIn("hard_delete_selected_research_works", actions)
 
-    def test_teacher_cannot_access_admin_scope_or_terminal_advised_work(self):
-        admin_scope = self.make_work("Admin-only advised work")
-        admin_scope.visibility_scope = "admin"
-        admin_scope.save(update_fields={"visibility_scope"})
-        archived = self.make_work("Archived advised work")
-        archived.status = ResearchWorkStatus.ARCHIVED
-        archived.save(update_fields={"status"}, _allow_status_transition=True)
-        WorkAdvisor.objects.create(research_work=admin_scope, professor=self.professor)
-        WorkAdvisor.objects.create(research_work=archived, professor=self.professor)
-        request = self.request_for(self.teacher)
+    def test_transition_audit_is_view_only_even_with_model_permissions(self):
+        self.grant(ResearchWorkTransition, "view", "change", "delete", "add")
+        model_admin = ResearchWorkTransitionAdmin(ResearchWorkTransition, self.site)
+        request = self.request()
 
-        queryset = self.model_admin.get_queryset(request)
-        self.assertNotIn(admin_scope, queryset)
-        self.assertNotIn(archived, queryset)
-        self.assertFalse(self.model_admin.has_view_permission(request, admin_scope))
-        self.assertFalse(self.model_admin.has_change_permission(request, archived))
+        self.assertTrue(model_admin.has_view_permission(request))
+        self.assertFalse(model_admin.has_add_permission(request))
+        self.assertFalse(model_admin.has_change_permission(request))
+        self.assertFalse(model_admin.has_delete_permission(request))

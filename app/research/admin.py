@@ -8,9 +8,8 @@ from django.template.response import TemplateResponse
 from django.utils.html import format_html
 
 from accounts.models import User
-from accounts.permissions import VisibilityScope, is_platform_admin, visible_scopes_for
+from accounts.permissions import VisibilityScope, is_platform_admin
 from accounts.services import record_audit_event
-from professors.services import linked_professor_for_teacher
 from public_site.request_ids import request_id_for
 
 from .models import (
@@ -30,28 +29,6 @@ from .hard_delete import hard_delete_research_work
 from .services import transition_research_work
 
 
-def _teacher_manageable_works(user):
-    linked = linked_professor_for_teacher(user)
-    if linked is None:
-        return ResearchWork.objects.none()
-    return (
-        ResearchWork.objects.filter(
-            advisor_links__professor=linked,
-            visibility_scope__in=visible_scopes_for(user),
-        )
-        .exclude(status__in=(ResearchWorkStatus.ARCHIVED, ResearchWorkStatus.REJECTED))
-        .distinct()
-    )
-
-
-def _can_access_work(user, research_work=None) -> bool:
-    if is_platform_admin(user):
-        return True
-    if research_work is None:
-        return _teacher_manageable_works(user).exists()
-    return _teacher_manageable_works(user).filter(pk=research_work.pk).exists()
-
-
 class StudentVisibilityForm(forms.Form):
     visibility_scope = forms.ChoiceField(
         label="可見性範圍",
@@ -65,38 +42,12 @@ class WorkAdvisorInline(admin.TabularInline):
     extra = 0
     autocomplete_fields = ("professor",)
 
-    def has_view_permission(self, request, obj=None):
-        return _can_access_work(request.user, obj)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_add_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-
 class WorkAuthorInline(admin.TabularInline):
     model = WorkAuthor
     extra = 0
     fields = ("user", "student", "position")
     readonly_fields = ("student",)
     autocomplete_fields = ("user",)
-
-    def has_view_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_add_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
 
 class WorkFieldInline(admin.TabularInline):
     model = WorkField
@@ -133,10 +84,6 @@ class ResearchWorkTransitionInline(admin.TabularInline):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    def has_view_permission(self, request, obj=None):
-        return _can_access_work(request.user, obj)
-
-
 @admin.register(ResearchWork)
 class ResearchWorkAdmin(admin.ModelAdmin):
     inlines = (
@@ -163,47 +110,27 @@ class ResearchWorkAdmin(admin.ModelAdmin):
         "hard_delete_selected_research_works",
     )
 
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        return queryset.filter(pk__in=_teacher_manageable_works(request.user))
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or linked_professor_for_teacher(
-            request.user
-        ) is not None
-
-    def has_view_permission(self, request, obj=None):
-        return _can_access_work(request.user, obj)
-
-    def has_change_permission(self, request, obj=None):
-        return _can_access_work(request.user, obj)
-
-    def has_add_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
     def _can_hard_delete(self, request) -> bool:
-        return is_platform_admin(request.user) and request.user.has_perm(
-            "research.hard_delete_researchwork"
-        )
+        return request.user.has_perm("research.hard_delete_researchwork")
 
     def get_readonly_fields(self, request, obj=None):
         fields = list(super().get_readonly_fields(request, obj))
         # Admin-created works always begin at the model default (draft). Trusted
         # fixture/import code may still create historical records at a later state.
         fields.append("status")
-        if not is_platform_admin(request.user):
-            fields.extend(("visibility_scope", "created_by", "updated_by"))
         return tuple(dict.fromkeys(fields))
 
     def get_actions(self, request):
         actions = super().get_actions(request)
         if not is_platform_admin(request.user):
-            for action_name in self.actions:
+            for action_name in (
+                "transition_to_approved",
+                "transition_to_published",
+                "transition_to_archived",
+                "transition_to_rejected",
+                "restore_archived",
+                "rerun_extraction_pipeline",
+            ):
                 actions.pop(action_name, None)
         if not self._can_hard_delete(request):
             actions.pop("hard_delete_selected_research_works", None)
@@ -364,28 +291,9 @@ class StudentAdmin(admin.ModelAdmin):
             ).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        return queryset if is_platform_admin(request.user) else queryset.none()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_add_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
     @admin.action(description="批量設定可見性範圍")
     def set_selected_visibility(self, request, queryset):
-        if not is_platform_admin(request.user):
+        if not request.user.has_perm("research.change_student"):
             self.message_user(request, "您沒有批量設定研究學生可見性的權限。", messages.ERROR)
             return None
 
@@ -467,24 +375,6 @@ class ResearchWorkTransitionAdmin(admin.ModelAdmin):
     raw_id_fields = ("research_work", "actor")
     readonly_fields = tuple(field.name for field in ResearchWorkTransition._meta.fields)
 
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        return queryset.filter(
-            research_work__in=_teacher_manageable_works(request.user)
-        ).distinct()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or linked_professor_for_teacher(
-            request.user
-        ) is not None
-
-    def has_view_permission(self, request, obj=None):
-        return _can_access_work(
-            request.user, obj.research_work if obj is not None else None
-        )
-
     def has_add_permission(self, request):
         return False
 
@@ -503,76 +393,8 @@ class WorkAdvisorAdmin(admin.ModelAdmin):
     autocomplete_fields = ("research_work", "professor")
     readonly_fields = ("id", "created_at")
 
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        linked = linked_professor_for_teacher(request.user)
-        if linked is None:
-            return queryset.none()
-        return queryset.filter(
-            professor=linked,
-            research_work__in=_teacher_manageable_works(request.user),
-        )
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or linked_professor_for_teacher(
-            request.user
-        ) is not None
-
-    def has_view_permission(self, request, obj=None):
-        if is_platform_admin(request.user):
-            return True
-        linked = linked_professor_for_teacher(request.user)
-        return linked is not None and (
-            obj is None
-            or (
-                obj.professor_id == linked.pk
-                and _teacher_manageable_works(request.user)
-                .filter(pk=obj.research_work_id)
-                .exists()
-            )
-        )
-
-    def has_add_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-
 class OwnedWorkRelationshipAdmin(admin.ModelAdmin):
-    """Fail-closed standalone relationship admin for teacher accounts."""
-
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
-            return queryset
-        return queryset.filter(
-            research_work__in=_teacher_manageable_works(request.user)
-        ).distinct()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user) or linked_professor_for_teacher(
-            request.user
-        ) is not None
-
-    def has_view_permission(self, request, obj=None):
-        return _can_access_work(
-            request.user, obj.research_work if obj is not None else None
-        )
-
-    def has_add_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
+    """Standalone relationship admin governed by Django model permissions."""
 
 
 @admin.register(WorkAuthor)
@@ -588,17 +410,6 @@ class WorkAuthorAdmin(OwnedWorkRelationshipAdmin):
     fields = ("research_work", "user", "student", "position")
     readonly_fields = ("id", "student", "created_at")
 
-    def get_queryset(self, request):
-        queryset = admin.ModelAdmin.get_queryset(self, request)
-        return queryset if is_platform_admin(request.user) else queryset.none()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-
 @admin.register(WorkField)
 class WorkFieldAdmin(OwnedWorkRelationshipAdmin):
     list_display = (
@@ -613,17 +424,6 @@ class WorkFieldAdmin(OwnedWorkRelationshipAdmin):
     autocomplete_fields = ("research_work", "research_field")
     readonly_fields = ("id", "created_at")
 
-    def get_queryset(self, request):
-        queryset = admin.ModelAdmin.get_queryset(self, request)
-        return queryset if is_platform_admin(request.user) else queryset.none()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
-
-
 @admin.register(WorkMethod)
 class WorkMethodAdmin(OwnedWorkRelationshipAdmin):
     list_display = ("research_work", "research_method", "usage", "status")
@@ -631,13 +431,3 @@ class WorkMethodAdmin(OwnedWorkRelationshipAdmin):
     search_fields = ("research_work__title", "research_method__display_name")
     autocomplete_fields = ("research_work", "research_method")
     readonly_fields = ("id", "created_at")
-
-    def get_queryset(self, request):
-        queryset = admin.ModelAdmin.get_queryset(self, request)
-        return queryset if is_platform_admin(request.user) else queryset.none()
-
-    def has_module_permission(self, request):
-        return is_platform_admin(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        return is_platform_admin(request.user)
