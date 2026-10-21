@@ -1,4 +1,6 @@
 from django.contrib.admin.sites import AdminSite
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TestCase
 
 from accounts.models import Role, User, UserRole
@@ -83,6 +85,33 @@ class ProfessorAdminObjectPermissionTests(TestCase):
         self.assertFalse(self.model_admin.get_queryset(request).exists())
         self.assertFalse(self.model_admin.has_module_permission(request))
         self.assertFalse(self.model_admin.has_view_permission(request, self.own_profile))
+
+    def test_group_with_view_professor_permission_can_browse_all_professors(self):
+        lab_member = User.objects.create_user(
+            username="lab-member",
+            email="lab-member@example.test",
+            is_staff=True,
+        )
+        group = Group.objects.create(name="Lab_Member")
+        permission = Permission.objects.get(
+            content_type=ContentType.objects.get_for_model(Professor),
+            codename="view_professor",
+        )
+        group.permissions.add(permission)
+        lab_member.groups.add(group)
+        lab_member = User.objects.get(pk=lab_member.pk)
+        request = self.request_for(lab_member)
+
+        self.assertQuerySetEqual(
+            self.model_admin.get_queryset(request),
+            [self.own_profile, self.other_profile],
+            ordered=False,
+        )
+        self.assertTrue(self.model_admin.has_module_permission(request))
+        self.assertTrue(self.model_admin.has_view_permission(request, self.other_profile))
+        self.assertFalse(self.model_admin.has_change_permission(request, self.other_profile))
+        self.assertFalse(self.model_admin.has_add_permission(request))
+        self.assertFalse(self.model_admin.has_delete_permission(request, self.other_profile))
 
     def test_inactive_linked_professor_revokes_teacher_admin_access(self):
         self.own_profile.status = "inactive"

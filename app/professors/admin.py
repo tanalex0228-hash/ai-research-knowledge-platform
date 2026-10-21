@@ -17,6 +17,38 @@ def _can_access_professor(user, professor=None) -> bool:
     return professor is None or professor.pk == linked.pk
 
 
+def _has_group_permission(user, permission: str) -> bool:
+    """Check an explicit Django Group permission without widening role access."""
+
+    if not getattr(user, "is_authenticated", False):
+        return False
+    app_label, codename = permission.split(".", maxsplit=1)
+    return user.groups.filter(
+        permissions__content_type__app_label=app_label,
+        permissions__codename=codename,
+    ).exists()
+
+
+def _can_browse_all_professors(user) -> bool:
+    """Allow group-authorized collaborators to browse professors for relations.
+
+    ``WorkAdvisor`` uses Django's autocomplete endpoint, which consults the
+    target admin's queryset and view permission.  A collaborator needs to see
+    existing professors to attach an advisor, but that must not grant the
+    ability to edit professor profiles.
+    """
+
+    return is_platform_admin(user) or _has_group_permission(
+        user, "professors.view_professor"
+    )
+
+
+def _can_view_professor(user, professor=None) -> bool:
+    if _can_browse_all_professors(user):
+        return True
+    return _can_access_professor(user, professor)
+
+
 class ProfessorAliasInline(admin.TabularInline):
     model = ProfessorAlias
     extra = 0
@@ -53,18 +85,16 @@ class ProfessorAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
-        if is_platform_admin(request.user):
+        if _can_browse_all_professors(request.user):
             return queryset
         linked = linked_professor_for_teacher(request.user)
         return queryset.filter(pk=linked.pk) if linked is not None else queryset.none()
 
     def has_module_permission(self, request):
-        return is_platform_admin(request.user) or linked_professor_for_teacher(
-            request.user
-        ) is not None
+        return _can_view_professor(request.user)
 
     def has_view_permission(self, request, obj=None):
-        return _can_access_professor(request.user, obj)
+        return _can_view_professor(request.user, obj)
 
     def has_change_permission(self, request, obj=None):
         return _can_access_professor(request.user, obj)
