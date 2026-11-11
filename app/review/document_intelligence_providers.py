@@ -276,6 +276,8 @@ class OpenAIDocumentIntelligenceProvider:
                 }
             },
         }
+        if self.model_name.startswith(("gpt-5", "gpt-6")):
+            request_payload["reasoning"] = {"effort": "low"}
         body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url.rstrip('/')}/responses",
@@ -352,6 +354,6 @@ def get_document_intelligence_provider() -> DocumentIntelligenceProvider:
             or getattr(settings, "LLM_MODEL", "")
             or "gpt-6.1-sol",
             base_url=getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            timeout_seconds=int(getattr(settings, "DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", 180)),
+            timeout_seconds=int(getattr(settings, "DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", 480)),
         )
     return DeterministicDocumentIntelligenceProvider()

@@ -333,6 +333,7 @@ def create_extraction_job_and_candidates(
         DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA,
         DOCUMENT_INTELLIGENCE_PROMPT,
         DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
+        extract_cover_authors,
         extract_source_abstract,
         normalize_provider_payload,
         whole_document_text,
@@ -499,7 +500,9 @@ def create_extraction_job_and_candidates(
                       extraction_reason="Extracted only from explicit 指導教授/指導老師 label blocks.")
 
     # Extract Authors
-    authors_found = labeled_people(r"(?:學生|作者|撰寫人)")
+    authors_found = list(dict.fromkeys(
+        labeled_people(r"(?:學生|作者|撰寫人)") + extract_cover_authors(chunks)
+    ))
     if authors_found:
         add_candidate("authors", authors_found, ExtractionResultType.SUMMARY,
                       confidence=0.88,

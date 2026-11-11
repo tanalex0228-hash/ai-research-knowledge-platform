@@ -213,6 +213,37 @@ def person_evidence(chunks, name: str) -> list[dict[str, Any]]:
     return []
 
 
+def extract_cover_authors(chunks) -> list[str]:
+    """Read explicitly labelled student/member names in front matter only."""
+
+    names: list[str] = []
+    label = re.compile(r"^\s*(?:組員姓名|學生姓名|研究生姓名|作者姓名)\s*[:：]\s*(.*)$")
+
+    def add_line(line: str) -> bool:
+        found = False
+        for piece in re.split(r"[、，,；;]", line):
+            name = re.sub(r"\s+", "", piece)
+            if re.fullmatch(r"[\u3400-\u9fff]{2,5}", name):
+                found = True
+                if name not in names:
+                    names.append(name)
+        return found
+
+    for chunk in sorted(chunks, key=lambda item: item.chunk_index):
+        if (chunk.page_start or 1) > 3:
+            break
+        in_names = False
+        for line in chunk.text.splitlines():
+            match = label.match(line)
+            if match:
+                in_names = True
+                add_line(match.group(1))
+                continue
+            if in_names and not add_line(line):
+                in_names = False
+    return names
+
+
 def chunk_evidence(chunk, excerpt: str | None = None) -> dict[str, Any]:
     text = normalize_text(excerpt or chunk.text[:500])
     return {
@@ -576,6 +607,8 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
 
     student_roles = {"student", "author", "student author", "學生", "作者"}
     author_names = unique_names(author_values + metadata_author_values, allowed_roles=student_roles)
+    if not author_names:
+        author_names = extract_cover_authors(chunks)
     advisor_names = unique_names(
         advisor_values + metadata_advisor_values,
         allowed_roles={"advisor", "primary advisor", "指導老師", "指導教授"},

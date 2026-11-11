@@ -503,6 +503,30 @@ class DocumentIntelligenceProviderTests(TestCase):
             ).exists()
         )
 
+    def test_timeout_keeps_multiline_cover_student_candidates(self):
+        self.chunk1.text = (
+            "輔仁大學金融與國際企業學系\n"
+            "指導教授：蔡麗茹\n"
+            "組員姓名：譚孝安\n"
+            "             林新生\n"
+            "             黃   敏\n"
+            "\n中華民國一一四年五月\n"
+        )
+        self.chunk1.save(update_fields=["text"])
+        create_extraction_job_and_candidates(
+            self.document,
+            provider=FakeProvider(error=DocumentIntelligenceTimeout("timeout")),
+        )
+        candidate = self.document_intelligence_item().candidate_value
+        self.assertEqual(
+            [author["full_name"] for author in candidate["authors"]],
+            ["譚孝安", "林新生", "黃敏"],
+        )
+        self.assertEqual(len(candidate["database_actions"]["students"]), 3)
+        self.assertTrue(candidate["database_actions"]["students"][0]["matched"])
+        self.assertTrue(candidate["database_actions"]["students"][0]["evidence"])
+        self.assertFalse(WorkAuthor.objects.filter(research_work=self.work).exists())
+
     @override_settings(
         DOCUMENT_INTELLIGENCE_PROVIDER="openai",
         OPENAI_API_KEY="",
