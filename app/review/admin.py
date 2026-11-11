@@ -107,6 +107,8 @@ class ReviewItemAdmin(admin.ModelAdmin):
         if len(parts) >= 3 and parts[0] in {"relations", "suggestions"}:
             suffix = "可關聯" if parts[0] == "relations" else "未找到既有資料"
             return f"{names.get(parts[1], parts[1])} · {suffix}"
+        if obj.field_path == "authors":
+            return "作者辨識總覽 · 不建立關聯"
         return obj.field_path
 
     @admin.display(description="研究成果")
@@ -127,7 +129,16 @@ class ReviewItemAdmin(admin.ModelAdmin):
         from django.utils.html import format_html
         val = obj.candidate_value
         if isinstance(val, dict):
-            display = val.get("name") or val.get("value") or val.get("slug") or str(val)
+            display = (
+                val.get("name")
+                or val.get("student_name")
+                or val.get("professor_name")
+                or val.get("research_field_name")
+                or val.get("research_method_name")
+                or val.get("value")
+                or val.get("slug")
+                or str(val)
+            )
             if val.get("canonical_name") and val.get("canonical_name") != display:
                 display = f"{display} → {val['canonical_name']}"
             if val.get("provider_fallback_reason"):
@@ -149,6 +160,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
 
     def _apply_decision(self, request, queryset, *, action, reason):
         succeeded = 0
+        relation_reviews = 0
         failures: list[str] = []
         for item in queryset.only("pk"):
             try:
@@ -162,12 +174,15 @@ class ReviewItemAdmin(admin.ModelAdmin):
                 failures.append(f"{item.pk}: {exc}")
             else:
                 succeeded += 1
+                if action == ReviewAction.APPROVE and item.field_path.startswith("relations."):
+                    relation_reviews += 1
 
         if succeeded:
             self.message_user(
                 request,
                 (
-                    f"已核准 {succeeded} 筆；其中既有資料的關聯已附加至研究成果。"
+                    f"已核准 {succeeded} 筆；其中 {relation_reviews} 筆為逐人／分類關聯審核，"
+                    "其餘僅記錄審核結果，不會建立關聯。"
                     if action == ReviewAction.APPROVE
                     else f"已記錄 {succeeded} 筆不可變審核決策。"
                 ),

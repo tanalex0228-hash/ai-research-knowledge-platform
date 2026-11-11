@@ -131,6 +131,10 @@ def decide_review_item(
         raise ValidationError(
             {"assign_to": "An assignee is only valid when requesting teacher review."}
         )
+    if action == ReviewAction.APPROVE and locked.field_path == "authors":
+        raise ValidationError(
+            "作者辨識總覽不會建立關聯；請逐一核准「研究學生 · 可關聯」項目。"
+        )
 
     previous_state = locked.state
     with _allow_review_transition():
@@ -499,16 +503,11 @@ def create_extraction_job_and_candidates(
                       source_text=all_chunks_text,
                       extraction_reason="Extracted only from explicit 指導教授/指導老師 label blocks.")
 
-    # Extract Authors
+    # Extract Authors for the structured document candidate. The per-person
+    # relationship review items below are the only approvable author actions.
     authors_found = list(dict.fromkeys(
         labeled_people(r"(?:學生|作者|撰寫人)") + extract_cover_authors(chunks)
     ))
-    if authors_found:
-        add_candidate("authors", authors_found, ExtractionResultType.SUMMARY,
-                      confidence=0.88,
-                      evidence=f"Matched explicit author/student label names: {', '.join(authors_found)}.",
-                      source_text=all_chunks_text,
-                      extraction_reason="Extracted only from explicit 學生/作者/撰寫人 label blocks.")
 
     # Scan Chunks for ResearchFields and ResearchMethods (Taxonomy)
     from taxonomy.models import TaxonomyStatus

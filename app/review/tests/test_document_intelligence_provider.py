@@ -204,6 +204,8 @@ class DocumentIntelligenceProviderTests(TestCase):
         self.assertEqual(evidence["page_number"], 1)
         self.assertEqual(evidence["chunk_id"], str(self.chunk1.pk))
         self.assertIn("譚孝安", evidence["source_excerpt"])
+        self.assertFalse(ReviewItem.objects.filter(field_path="authors").exists())
+        self.assertTrue(ReviewItem.objects.filter(field_path="relations.work_authors.1").exists())
 
     def test_multiple_authors_and_referenced_scholars_are_not_authors(self):
         authors = [

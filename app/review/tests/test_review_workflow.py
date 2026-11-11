@@ -124,6 +124,27 @@ class ReviewWorkflowTests(TestCase):
             original,
         )
 
+    def test_legacy_combined_author_review_cannot_be_mistaken_for_linking(self):
+        item = self.make_review_item(
+            field_path="authors", candidate_value={"value": ["學生甲", "學生乙"]}
+        )
+        with self.assertRaisesMessage(ValidationError, "逐一核准"):
+            decide_review_item(
+                item=item, reviewer=self.make_admin(), action=ReviewAction.APPROVE
+            )
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.PENDING)
+        self.assertFalse(ReviewDecision.objects.filter(review_item=item).exists())
+
+    def test_admin_shows_one_student_name_for_relation_candidate(self):
+        item = self.make_review_item(
+            field_path="relations.work_authors.1",
+            candidate_value={"student_name": "學生甲", "matched": True},
+        )
+        admin_view = ReviewItemAdmin(ReviewItem, AdminSite())
+        self.assertIn("學生甲", str(admin_view.candidate_preview(item)))
+        self.assertEqual(admin_view.candidate_type(item), "研究學生 · 可關聯")
+
     def make_teacher(self, suffix: str, *, active: bool = True):
         user = User.objects.create_user(
             username=f"teacher-{suffix}",
