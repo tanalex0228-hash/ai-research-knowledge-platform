@@ -190,6 +190,8 @@ class DocumentIntelligenceProviderTests(TestCase):
 
         self.assertIsNone(candidate["metadata"]["publication_year"])
         self.assertIsNone(candidate["metadata"]["research_type"])
+        self.assertIsNone(candidate["metadata"]["title"])
+        self.assertFalse(ReviewItem.objects.filter(field_path="title").exists())
 
         self.assertEqual(len(candidate["authors"]), 1)
         self.assertEqual(candidate["authors"][0]["full_name"], "譚孝安")
@@ -223,6 +225,56 @@ class DocumentIntelligenceProviderTests(TestCase):
         self.assertFalse(new_student["matched"])
         self.assertTrue(new_student["proposed_new_entity"])
         self.assertEqual(new_student["action"], "propose_new_student")
+
+    def test_two_character_chinese_names_match_despite_internal_space(self):
+        student = Student.objects.create(display_name="王明", status="active")
+        professor = Professor.objects.create(display_name="李安")
+        self.chunk1.text += "\n作者：王 明\n指導教授：李 安\n"
+        self.chunk1.save(update_fields=["text"])
+        payload = self.payload(authors=[{"full_name": "王 明", "role": "Student"}])
+        payload["advisors"] = [{"full_name": "李 安", "role": "Advisor"}]
+        payload["metadata"]["advisors"] = ["李 安"]
+        payload["metadata"]["co_advisors"] = []
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=payload))
+        actions = self.document_intelligence_item().candidate_value["database_actions"]
+        self.assertEqual(actions["students"][0]["student_id"], str(student.pk))
+        self.assertEqual(actions["professors"][0]["professor_id"], str(professor.pk))
+        self.assertTrue(actions["students"][0]["evidence"])
+        self.assertTrue(actions["professors"][0]["evidence"])
+
+    def test_full_abstract_across_pages_requires_approval(self):
+        self.chunk2.text = "摘要\n第一段完整內容。"
+        self.chunk2.save(update_fields=["text"])
+        chunk3 = DocumentChunk.objects.create(
+            source_document=self.document, chunk_index=2, page_start=3, page_end=3,
+            text="第二段完整內容。\n關鍵字：金融、實證\n第一章 緒論",
+            token_count=20, visibility_scope=VisibilityScope.PUBLIC,
+        )
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=self.payload()))
+        self.work.refresh_from_db()
+        self.assertEqual(self.work.abstract, "")
+        item = ReviewItem.objects.get(field_path="abstract")
+        self.assertEqual(item.candidate_value["value"], "第一段完整內容。\n第二段完整內容。")
+        self.assertEqual(
+            [part["chunk_id"] for part in item.candidate_value["evidence"]],
+            [str(self.chunk2.pk), str(chunk3.pk)],
+        )
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        self.work.refresh_from_db()
+        self.assertEqual(self.work.abstract, "第一段完整內容。\n第二段完整內容。")
+        self.assertEqual(self.work.title, "Placeholder title")
+
+    def test_abstract_approval_does_not_overwrite_manual_edit(self):
+        self.chunk2.text = "摘要\n原文摘要。\n關鍵字：金融"
+        self.chunk2.save(update_fields=["text"])
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=self.payload()))
+        self.work.abstract = "管理員人工摘要"
+        self.work.save(update_fields=["abstract"])
+        item = ReviewItem.objects.get(field_path="abstract")
+        with self.assertRaises(ValidationError):
+            decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.PENDING)
 
     def test_advisor_and_co_advisor_roles_are_separate(self):
         create_extraction_job_and_candidates(

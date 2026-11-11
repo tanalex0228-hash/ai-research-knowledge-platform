@@ -141,11 +141,17 @@ def chunk_context(chunks) -> list[dict[str, Any]]:
 
 
 def provider_input_payload(*, document, chunks) -> dict[str, Any]:
+    from review.document_intelligence import extract_source_abstract, extract_keywords, whole_document_text
+
+    source_abstract, abstract_evidence = extract_source_abstract(chunks)
     return {
         "schema_version": "document_intelligence.v1",
         "source_document_id": str(document.pk),
         "research_work_id": str(document.research_work_id),
         "reading_requirement": "Analyze every page-aware chunk in order.",
+        "source_abstract": source_abstract,
+        "source_abstract_evidence": abstract_evidence,
+        "source_keywords": extract_keywords(whole_document_text(chunks)),
         "chunks": chunk_context(chunks),
         "database_context": database_context(),
     }
@@ -246,7 +252,7 @@ class OpenAIDocumentIntelligenceProvider:
         request_payload = {
             "model": self.model_name,
             "max_output_tokens": int(
-                getattr(settings, "DOCUMENT_INTELLIGENCE_MAX_OUTPUT_TOKENS", 16000)
+                getattr(settings, "DOCUMENT_INTELLIGENCE_MAX_OUTPUT_TOKENS", 24000)
             ),
             "input": [
                 {
@@ -344,8 +350,8 @@ def get_document_intelligence_provider() -> DocumentIntelligenceProvider:
             api_key=api_key,
             model_name=getattr(settings, "DOCUMENT_INTELLIGENCE_MODEL", "")
             or getattr(settings, "LLM_MODEL", "")
-            or "gpt-4.1-mini",
+            or "gpt-6.1-sol",
             base_url=getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            timeout_seconds=int(getattr(settings, "DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", 90)),
+            timeout_seconds=int(getattr(settings, "DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", 180)),
         )
     return DeterministicDocumentIntelligenceProvider()

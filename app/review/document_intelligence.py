@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from professors.models import Professor, normalize_person_name
-from research.models import Student, normalize_research_text
+from research.models import Student
 from taxonomy.models import ResearchField, ResearchMethod, normalize_taxonomy_label
 
 
@@ -24,8 +24,9 @@ Every uploaded PDF will become a ResearchWork inside the platform.
 
 Your output is a review candidate. Only a human-approved, separately validated
 existing-entity relationship may later be added by the review service.
-Never detect, infer, or return publication year or research type. Set
-metadata.publication_year and metadata.research_type to null.
+Never detect, infer, or return title, publication year or research type. The
+title is entered by a human. Set metadata.title, metadata.publication_year
+and metadata.research_type to null.
 
 Accuracy is more important than creativity.
 
@@ -37,13 +38,16 @@ READING REQUIREMENTS
 
 Read every supplied page-aware chunk. Use the cover/author page for authors and
 advisors, the abstract and chapters 3-4 (research design/methodology) for methods,
-and the whole paper for research fields. A method merely cited in references or
+and the whole paper (including the keyword line) for research fields. Select
+three or four principal fields and methods when the paper supports them; use
+fewer when evidence is insufficient. Compare the abstract, keywords, research
+design, findings and conclusion before deciding. A method merely cited in references or
 related work is not necessarily used by this paper. Do not classify referenced
 scholars as authors or advisors.
 
 EXTRACT RESEARCH METADATA
 
-Extract title, subtitle, language, research degree, department, school,
+Extract subtitle, language, research degree, department, school,
 university, academic term, student authors, corresponding author, advisors,
 co-advisors, research fields, research methods, research variables, datasets,
 keywords, theories, models, technologies, companies, organizations, countries,
@@ -153,6 +157,62 @@ def whole_document_text(chunks) -> str:
     )
 
 
+def extract_source_abstract(chunks) -> tuple[str | None, list[dict[str, Any]]]:
+    """Capture the complete front-matter Chinese abstract across page chunks."""
+
+    heading = re.compile(r"^\s*摘\s*要\s*[:：]?\s*(.*)$")
+    stop = re.compile(
+        r"^\s*(?:關\s*鍵\s*字|关\s*键\s*词|Keywords?|Abstract|目\s*錄|參考文獻|References|"
+        r"第\s*[一二三四五六七八九十0-9]+\s*章|Chapter\s*\d+)(?:\s|$|[:：])",
+        re.IGNORECASE,
+    )
+    parts: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    started = False
+    start_page = None
+    for chunk in sorted(chunks, key=lambda item: item.chunk_index):
+        page = chunk.page_start or 1
+        if not started and page > 12:
+            break
+        if started and start_page is not None and page > start_page + 3:
+            break
+        captured: list[str] = []
+        for line in chunk.text.replace("\x00", "").splitlines():
+            if not started:
+                match = heading.match(line)
+                if not match or re.fullmatch(r"[ivxIVX\d.\s]+", match.group(1)):
+                    continue
+                started = True
+                start_page = page
+                line = match.group(1)
+            if stop.match(line):
+                if captured:
+                    evidence.append(chunk_evidence(chunk, "\n".join(captured)))
+                return ("\n".join(parts).strip() or None, evidence)
+            if line.strip():
+                parts.append(line.strip())
+                captured.append(line.strip())
+        if captured:
+            evidence.append(chunk_evidence(chunk, "\n".join(captured)))
+    return ("\n".join(parts).strip() or None, evidence)
+
+
+def person_match_key(value: str) -> str:
+    """Treat OCR spacing within Chinese names as insignificant."""
+
+    normalized = normalize_person_name(value)
+    return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", normalized)
+
+
+def person_evidence(chunks, name: str) -> list[dict[str, Any]]:
+    key = person_match_key(name)
+    for chunk in chunks:
+        for line in chunk.text.splitlines():
+            if key and key in person_match_key(line):
+                return [chunk_evidence(chunk, line)]
+    return []
+
+
 def chunk_evidence(chunk, excerpt: str | None = None) -> dict[str, Any]:
     text = normalize_text(excerpt or chunk.text[:500])
     return {
@@ -199,7 +259,7 @@ def method_context_chunks(chunks):
         elif re.search(r"(?:^|\n)\s*(?:第[一二五六1256]章|Chapter\s*[1256])", text, re.IGNORECASE):
             in_method_chapter = False
         if in_method_chapter or re.search(
-            r"(?:摘要|Abstract|研究方法|研究設計|實證方法|Methodology)", text, re.IGNORECASE
+            r"(?:摘要|Abstract|關鍵字|关键词|Keywords?|研究方法|研究設計|實證方法|Methodology)", text, re.IGNORECASE
         ):
             selected.append(chunk)
     return selected
@@ -266,14 +326,14 @@ def match_professors(names: list[str]) -> list[MatchedEntity]:
     active = list(Professor.objects.active())
     by_name: dict[str, set[Professor]] = {}
     for professor in active:
-        by_name.setdefault(normalize_person_name(professor.display_name), set()).add(professor)
+        by_name.setdefault(person_match_key(professor.display_name), set()).add(professor)
     for professor in active:
         for alias in professor.aliases.all():
-            by_name.setdefault(normalize_person_name(alias.alias), set()).add(professor)
+            by_name.setdefault(person_match_key(alias.alias), set()).add(professor)
 
     matches: list[MatchedEntity] = []
     for name in names:
-        candidates = by_name.get(normalize_person_name(name), set())
+        candidates = by_name.get(person_match_key(name), set())
         professor = next(iter(candidates)) if len(candidates) == 1 else None
         matches.append(
             MatchedEntity(
@@ -293,7 +353,7 @@ def match_students(names: list[str]) -> list[MatchedEntity]:
 
     by_name: dict[str, list[Student]] = {}
     for student in Student.objects.active():
-        by_name.setdefault(normalize_research_text(student.display_name), []).append(student)
+        by_name.setdefault(person_match_key(student.display_name), []).append(student)
     users_by_name: dict[str, list[Any]] = {}
     for user in User.objects.filter(
         is_active=True, roles__slug="student", roles__is_active=True,
@@ -302,10 +362,10 @@ def match_students(names: list[str]) -> list[MatchedEntity]:
         profile = getattr(user, "profile", None)
         display_name = (getattr(profile, "display_name", "") or "").strip()
         display_name = display_name or user.get_full_name().strip() or user.username
-        users_by_name.setdefault(normalize_research_text(display_name), []).append(user)
+        users_by_name.setdefault(person_match_key(display_name), []).append(user)
     matches: list[MatchedEntity] = []
     for name in names:
-        normalized = normalize_research_text(name)
+        normalized = person_match_key(name)
         candidates = by_name.get(normalized, [])
         user_candidates = users_by_name.get(normalized, [])
         unique = len(candidates) + len(user_candidates) == 1
@@ -487,7 +547,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
     metadata_evidence: dict[str, list[dict[str, Any]]] = {}
     confidence: dict[str, float | None] = {}
     for key in metadata_keys:
-        if key in {"research_type", "publication_year"}:
+        if key in {"title", "research_type", "publication_year"}:
             metadata[key] = None
             confidence[key] = None
             metadata_evidence[key] = []
@@ -555,7 +615,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
     )
 
     def entity_payload(match: MatchedEntity, *, role: str) -> dict[str, Any]:
-        evidence = evidence_for_terms(chunks, [match.name])
+        evidence = person_evidence(chunks, match.name)
         return {
             "full_name": match.name,
             "role": role,
@@ -599,7 +659,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
                 "target_type": "ResearchWork",
                 "target": str(document.research_work_id),
                 "confidence": item.confidence,
-                "evidence": evidence_for_terms(chunks, [item.name]),
+                "evidence": person_evidence(chunks, item.name),
             }
         )
     for item in advisor_matches:
@@ -612,7 +672,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
                 "target": str(document.research_work_id),
                 "advisor_role": "primary",
                 "confidence": item.confidence,
-                "evidence": evidence_for_terms(chunks, [item.name]),
+                "evidence": person_evidence(chunks, item.name),
             }
         )
     for item in coadvisor_matches:
@@ -625,7 +685,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
                 "target": str(document.research_work_id),
                 "advisor_role": "co_advisor",
                 "confidence": item.confidence,
-                "evidence": evidence_for_terms(chunks, [item.name]),
+                "evidence": person_evidence(chunks, item.name),
             }
         )
     for item in field_matches:
@@ -676,7 +736,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             "canonical_name": item.canonical_name,
             "proposed_new_entity": item.proposed_new_entity,
             "confidence": item.confidence,
-            "evidence": evidence_for_terms(chunks, [item.name]),
+            "evidence": person_evidence(chunks, item.name),
             "relation": {
                 "action": "create_work_author",
                 "research_work_id": str(document.research_work_id),
@@ -694,7 +754,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             "canonical_name": item.canonical_name,
             "proposed_new_entity": item.proposed_new_entity,
             "confidence": item.confidence,
-            "evidence": evidence_for_terms(chunks, [item.name]),
+            "evidence": person_evidence(chunks, item.name),
             "relation": {
                 "action": "create_work_advisor",
                 "research_work_id": str(document.research_work_id),
@@ -850,7 +910,7 @@ def build_document_intelligence_payload(
     academic_term = first_match(r"(\d{2,3}\s*學年度(?:\s*第?[一二1-2]\s*學期)?)", text)
 
     metadata = {
-        "title": extracted.get("title"),
+        "title": None,
         "subtitle": None,
         "language": extracted.get("language"),
         "research_type": None,

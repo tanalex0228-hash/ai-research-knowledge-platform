@@ -136,6 +136,8 @@ def decide_review_item(
     with _allow_review_transition():
         if action == ReviewAction.APPROVE and locked.field_path.startswith("relations."):
             _link_approved_existing_entity(locked)
+        elif action == ReviewAction.APPROVE and locked.field_path == "abstract":
+            _apply_approved_abstract(locked)
         decision = ReviewDecision(
             review_item=locked,
             reviewer=reviewer,
@@ -175,6 +177,39 @@ def promote_review_item(item: ReviewItem, value: dict | str) -> None:
     """
 
     raise PermissionDenied("AI analysis candidates cannot be promoted to canonical data.")
+
+
+def _apply_approved_abstract(item: ReviewItem) -> None:
+    """Promote only a verified source abstract after explicit administrator approval."""
+
+    from research.models import ResearchWork
+    from review.document_intelligence import extract_source_abstract
+
+    if item.target_type != ReviewTargetType.RESEARCH_WORK:
+        raise ValidationError("Abstract candidate must target a research work.")
+    source = item.extraction_result.job.source_document
+    if (
+        source.research_work_id != item.target_id
+        or item.extraction_result.job.schema_version != "document_intelligence.v1"
+    ):
+        raise ValidationError("The abstract source does not match this research work.")
+    candidate = item.candidate_value
+    if not isinstance(candidate, dict) or not isinstance(candidate.get("value"), str):
+        raise ValidationError("The abstract candidate is invalid.")
+    if not isinstance(item.current_value, dict) or "value" not in item.current_value:
+        raise ValidationError("The abstract candidate has no baseline value.")
+    source_text, evidence = extract_source_abstract(
+        source.chunks.order_by("chunk_index")
+    )
+    if not source_text or candidate["value"] != source_text or not evidence:
+        raise ValidationError("The abstract candidate no longer matches its source.")
+    if candidate.get("evidence") != evidence:
+        raise ValidationError("The abstract evidence cannot be verified.")
+    work = ResearchWork.objects.select_for_update().get(pk=item.target_id)
+    if work.abstract != item.current_value["value"]:
+        raise ValidationError("The abstract was edited after extraction; review again.")
+    work.abstract = source_text
+    work.save(update_fields=["abstract", "updated_at"])
 
 
 def _link_approved_existing_entity(item: ReviewItem) -> None:
@@ -298,6 +333,7 @@ def create_extraction_job_and_candidates(
         DOCUMENT_INTELLIGENCE_OUTPUT_SCHEMA,
         DOCUMENT_INTELLIGENCE_PROMPT,
         DOCUMENT_INTELLIGENCE_SCHEMA_VERSION,
+        extract_source_abstract,
         normalize_provider_payload,
         whole_document_text,
     )
@@ -358,7 +394,7 @@ def create_extraction_job_and_candidates(
     all_chunks_text = whole_document_text(chunks)
     candidates_created = 0
 
-    def add_candidate(field_path, value, result_type, confidence=1.0, model="deterministic-heuristic", evidence="", source_text="", extraction_reason="", candidate_data=None):
+    def add_candidate(field_path, value, result_type, confidence=1.0, model="deterministic-heuristic", evidence="", source_text="", extraction_reason="", candidate_data=None, evidence_chunk=None, current_value=None):
         nonlocal candidates_created
         if not chunks:
             return
@@ -368,7 +404,7 @@ def create_extraction_job_and_candidates(
             result_type=result_type,
             candidate_data=payload,
             confidence=confidence,
-            primary_evidence_chunk=chunks[0],
+            primary_evidence_chunk=evidence_chunk or chunks[0],
             schema_version=job.schema_version,
             visibility_scope=document.visibility_scope,
             status=ExtractionResultStatus.CANDIDATE,
@@ -379,6 +415,7 @@ def create_extraction_job_and_candidates(
             target_id=document.research_work_id,
             field_path=field_path,
             candidate_value=payload,
+            current_value=current_value or {},
             state=ReviewState.PENDING,
             visibility_scope=document.visibility_scope,
             confidence=confidence,
@@ -418,51 +455,28 @@ def create_extraction_job_and_candidates(
                     people.append(name)
         return people
 
-    # Extract Title
-    title = ""
-    title_from_document = False
-    if first_chunk_text:
-        lines = [line.strip() for line in first_chunk_text.split('\n') if line.strip()]
-        stop_keywords = ["輔仁", "大學", "學系", "專題", "學年度", "指導老師", "學生", "研究計劃", "報告", "目錄", "abstract", "摘要"]
-        candidate_lines = []
-        for line in lines[:8]:
-            if not any(k in line for k in stop_keywords) and len(line) > 3:
-                candidate_lines.append(line)
-        if candidate_lines:
-            title = max(candidate_lines[:3], key=len)
-            title_from_document = True
-        else:
-            title = lines[0] if lines else "Untitled Research"
-            title_from_document = bool(lines)
-    extracted_summary["title"] = title if title_from_document else None
-    extracted_summary["title_confidence"] = 0.9 if title_from_document else None
-    if title_from_document:
-        add_candidate("title", title, ExtractionResultType.SUMMARY,
-                      confidence=0.9,
-                      evidence="First chunk of PDF contains title text in prominent layout.",
-                      source_text=first_chunk_text[:500],
-                      extraction_reason="Heuristically extracted highest length line matching Title layout rules.")
+    # Title is human-owned; never extract or propose it.
+    extracted_summary["title"] = None
+    extracted_summary["title_confidence"] = None
 
-    # Extract Abstract
-    abstract = ""
-    abstract_from_document = False
-    for chunk in chunks:
-        match = re.search(r'(摘要|Abstract|ABSTRACT)[:：\s\n]+(.*)', chunk.text, re.DOTALL | re.IGNORECASE)
-        if match:
-            abstract_text = match.group(2).strip()
-            stop_match = re.split(r'(關鍵字|Keywords|Keywords:|1\.\s+(前言|緒論|Introduction)|目錄)', abstract_text, maxsplit=1, flags=re.IGNORECASE)
-            abstract = stop_match[0].strip()
-            if abstract:
-                abstract_from_document = True
-                break
-    extracted_summary["abstract"] = abstract if abstract_from_document else None
-    extracted_summary["abstract_confidence"] = 0.95 if abstract_from_document else None
-    if abstract_from_document:
-        add_candidate("abstract", abstract, ExtractionResultType.SUMMARY,
-                      confidence=0.95,
-                      evidence="Extracted matching segment after 'Abstract' keyword block.",
-                      source_text=first_chunk_text[:1000],
-                      extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
+    abstract, abstract_evidence = extract_source_abstract(chunks)
+    extracted_summary["abstract"] = abstract
+    extracted_summary["abstract_confidence"] = 1.0 if abstract else None
+    if abstract and abstract_evidence:
+        first_abstract_chunk = next(
+            chunk for chunk in chunks
+            if str(chunk.id) == abstract_evidence[0]["chunk_id"]
+        )
+        add_candidate(
+            "abstract", abstract, ExtractionResultType.SUMMARY,
+            confidence=1.0, model="source-abstract-extractor",
+            evidence="; ".join(f"第 {part['page_number']} 頁 / chunk {part['chunk_id']}" for part in abstract_evidence),
+            source_text=abstract,
+            extraction_reason="Complete front-matter abstract; keyword line excluded.",
+            candidate_data={"value": abstract, "evidence": abstract_evidence},
+            evidence_chunk=first_abstract_chunk,
+            current_value={"value": document.research_work.abstract},
+        )
 
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))

@@ -135,6 +135,8 @@ Run `scripts/create_pgvector_extension.sql` as a database migration/owner accoun
 
 No external AI call is required for the local demo path. `DOCUMENT_INTELLIGENCE_PROVIDER=deterministic` and `AI_PROVIDER=disabled` are safe defaults; the deterministic metadata extractor and local embedding adapter keep the prototype testable without model credentials.
 
+For production document analysis, set `DOCUMENT_INTELLIGENCE_PROVIDER=openai`, `DOCUMENT_INTELLIGENCE_MODEL=gpt-6.1-sol`, and `OPENAI_API_KEY` in the app server's private environment. The provider reads every page-aware chunk. A source abstract is extracted from the front-matter `摘要` section across pages, excluding its keyword line. The abstract remains a review candidate until an administrator approves it; approval rechecks the source and refuses to overwrite a manually edited abstract. The human-entered title, work type, and year are never extracted or changed by document intelligence. Research fields and methods remain review candidates until approved.
+
 ## Docker Compose
 
 ```bash
