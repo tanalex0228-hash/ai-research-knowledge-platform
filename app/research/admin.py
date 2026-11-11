@@ -2,10 +2,16 @@ from django.contrib import messages
 from django.contrib import admin
 from django.contrib.admin import helpers
 from django import forms
+from django.http import HttpResponse
+from django.forms.models import BaseInlineFormSet
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Max
 from django.template.response import TemplateResponse
+from django.urls import path, reverse
+from django.utils.decorators import method_decorator
 from django.utils.html import format_html
+from django.views.decorators.http import require_POST
 
 from accounts.models import User
 from accounts.permissions import VisibilityScope, is_platform_admin
@@ -42,12 +48,48 @@ class WorkAdvisorInline(admin.TabularInline):
     extra = 0
     autocomplete_fields = ("professor",)
 
+
+class WorkAuthorOrderFormSet(BaseInlineFormSet):
+    """Normalize posted positions before Django checks per-work uniqueness."""
+
+    def clean(self):
+        if any(form.errors for form in self.forms):
+            return super().clean()
+        ranked = []
+        for index, form in enumerate(self.forms):
+            if not form.cleaned_data or form.cleaned_data.get("DELETE"):
+                continue
+            if not form.instance.pk and not form.cleaned_data.get("user"):
+                continue
+            ranked.append((form.cleaned_data.get("position") or 65535, index, form))
+        for position, (_, _, form) in enumerate(sorted(ranked), start=1):
+            form.cleaned_data["position"] = position
+            form.instance.position = position
+        super().clean()
+
+
 class WorkAuthorInline(admin.TabularInline):
     model = WorkAuthor
     extra = 0
-    fields = ("user", "student", "position")
-    readonly_fields = ("student",)
+    formset = WorkAuthorOrderFormSet
+    fields = ("user", "student", "position", "move_controls")
+    readonly_fields = ("student", "move_controls")
     autocomplete_fields = ("user",)
+
+    class Media:
+        js = ("research/admin/author_sort.js",)
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == "position":
+            kwargs["widget"] = forms.HiddenInput
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
+
+    @admin.display(description="作者順序")
+    def move_controls(self, obj):
+        return format_html(
+            '<button type="button" class="button author-move" data-direction="up">上移</button> '
+            '<button type="button" class="button author-move" data-direction="down">下移</button>'
+        )
 
 class WorkFieldInline(admin.TabularInline):
     model = WorkField
@@ -162,6 +204,33 @@ class ResearchWorkAdmin(admin.ModelAdmin):
             obj.created_by = request.user
             obj.updated_by = request.user
         super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        if formset.model is not WorkAuthor:
+            return super().save_formset(request, form, formset, change)
+        with transaction.atomic():
+            formset.save(commit=False)
+            for author in formset.deleted_objects:
+                author.delete()
+            existing = list(
+                WorkAuthor.objects.select_for_update().filter(research_work=formset.instance)
+            )
+            offset = max((author.position for author in existing), default=0) + len(existing) + 1
+            for index, author in enumerate(existing):
+                WorkAuthor.objects.filter(pk=author.pk).update(position=offset + index)
+            active_forms = [
+                inline_form for inline_form in formset.forms
+                if inline_form.cleaned_data
+                and not inline_form.cleaned_data.get("DELETE")
+                and (inline_form.instance.pk or inline_form.cleaned_data.get("user"))
+            ]
+            active_forms.sort(key=lambda inline_form: inline_form.cleaned_data["position"])
+            for position, inline_form in enumerate(active_forms, start=1):
+                author = inline_form.save(commit=False)
+                author.research_work = formset.instance
+                author.position = position
+                author.save()
+            formset.save_m2m()
 
     def _transition_selected(self, request, queryset, to_status):
         request_id = request_id_for(request)
@@ -399,7 +468,7 @@ class OwnedWorkRelationshipAdmin(admin.ModelAdmin):
 
 @admin.register(WorkAuthor)
 class WorkAuthorAdmin(OwnedWorkRelationshipAdmin):
-    list_display = ("research_work", "user", "student", "position", "created_at")
+    list_display = ("research_work", "user", "student", "position", "move_controls", "created_at")
     search_fields = (
         "research_work__title",
         "student__display_name",
@@ -407,8 +476,70 @@ class WorkAuthorAdmin(OwnedWorkRelationshipAdmin):
         "user__email",
     )
     autocomplete_fields = ("research_work", "user")
-    fields = ("research_work", "user", "student", "position")
+    fields = ("research_work", "user", "student")
     readonly_fields = ("id", "student", "created_at")
+
+    class Media:
+        js = ("research/admin/author_sort.js",)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            ResearchWork.objects.select_for_update().get(pk=obj.research_work_id)
+            obj.position = (
+                WorkAuthor.objects.filter(research_work_id=obj.research_work_id)
+                .aggregate(maximum=Max("position"))["maximum"] or 0
+            ) + 1
+        super().save_model(request, obj, form, change)
+
+    def get_urls(self):
+        custom = [
+            path(
+                "<uuid:author_id>/move/<str:direction>/",
+                self.admin_site.admin_view(self.move_author),
+                name="research_workauthor_move",
+            )
+        ]
+        return custom + super().get_urls()
+
+    @admin.display(description="排序")
+    def move_controls(self, obj):
+        return format_html(
+            '<button type="button" class="button author-move-saved" data-url="{}">上移</button> '
+            '<button type="button" class="button author-move-saved" data-url="{}">下移</button>',
+            reverse("admin:research_workauthor_move", args=[obj.pk, "up"]),
+            reverse("admin:research_workauthor_move", args=[obj.pk, "down"]),
+        )
+
+    @method_decorator(require_POST)
+    def move_author(self, request, author_id, direction):
+        from django.core.exceptions import PermissionDenied
+
+        if not self.has_change_permission(request) or direction not in {"up", "down"}:
+            raise PermissionDenied
+        with transaction.atomic():
+            author = WorkAuthor.objects.select_related("research_work").get(pk=author_id)
+            ResearchWork.objects.select_for_update().get(pk=author.research_work_id)
+            links = list(
+                WorkAuthor.objects.filter(research_work_id=author.research_work_id)
+                .order_by("position", "id")
+            )
+            index = next(i for i, link in enumerate(links) if link.pk == author.pk)
+            neighbor_index = index + (-1 if direction == "up" else 1)
+            if 0 <= neighbor_index < len(links):
+                neighbor = links[neighbor_index]
+                spare = max(link.position for link in links) + 1
+                WorkAuthor.objects.filter(pk=author.pk).update(position=spare)
+                WorkAuthor.objects.filter(pk=neighbor.pk).update(position=author.position)
+                WorkAuthor.objects.filter(pk=author.pk).update(position=neighbor.position)
+                record_audit_event(
+                    event_type="research_work.author_reordered",
+                    actor=request.user,
+                    target_type="research_work",
+                    target_id=author.research_work_id,
+                    request_id=request_id_for(request),
+                    metadata={"author_id": str(author.pk), "direction": direction},
+                )
+        return HttpResponse(status=204)
 
 @admin.register(WorkField)
 class WorkFieldAdmin(OwnedWorkRelationshipAdmin):

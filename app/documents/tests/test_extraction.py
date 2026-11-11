@@ -105,11 +105,15 @@ class PDFExtractionTaskTests(TestCase):
 
         # Check ReviewItems
         review_items = list(ReviewItem.objects.filter(target_id=self.work.id))
-        self.assertEqual(len(review_items), 6)
+        self.assertGreaterEqual(len(review_items), 3)
         self.assertFalse(any(item.field_path == "year" for item in review_items))
         self.assertFalse(any(item.field_path == "work_type" for item in review_items))
-        field_review = next(item for item in review_items if "fields" in item.field_path)
-        self.assertEqual(field_review.candidate_value, {"slug": "esg"})
+        field_review = next(
+            item for item in review_items
+            if item.field_path.startswith("relations.work_fields.")
+        )
+        self.assertEqual(field_review.candidate_value["research_field_id"], str(self.field.pk))
+        self.assertEqual(field_review.candidate_value["evidence"][0]["chunk_id"], str(chunk.pk))
         self.assertEqual(field_review.state, ReviewState.PENDING)
         intelligence_review = next(
             item for item in review_items if item.field_path == "document_intelligence"

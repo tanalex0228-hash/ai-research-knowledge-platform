@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from professors.models import Professor, normalize_person_name
@@ -22,8 +22,8 @@ This platform is used by university students, professors and researchers.
 
 Every uploaded PDF will become a ResearchWork inside the platform.
 
-Your output is read-only analysis. It must never update, trigger, or apply
-changes to canonical database records, document metadata, relationships, or lifecycle.
+Your output is a review candidate. Only a human-approved, separately validated
+existing-entity relationship may later be added by the review service.
 Never detect, infer, or return publication year or research type. Set
 metadata.publication_year and metadata.research_type to null.
 
@@ -35,12 +35,22 @@ If information cannot be determined confidently, return null instead of guessing
 
 READING REQUIREMENTS
 
-Read the ENTIRE document.
-Do not only read the first page.
+Read every supplied page-aware chunk. Use the cover/author page for authors and
+advisors, the abstract and chapters 3-4 (research design/methodology) for methods,
+and the whole paper for research fields. A method merely cited in references or
+related work is not necessarily used by this paper. Do not classify referenced
+scholars as authors or advisors.
 
 EXTRACT RESEARCH METADATA
 
-Extract title, subtitle, language, research type, publication year, research degree, department, school, university, academic term, student authors, corresponding author, advisors, co-advisors, research fields, research methods, research variables, datasets, keywords, theories, models, technologies, companies, organizations, countries, industries, products, programming languages, software, statistical methods, research domain, research direction, research question, research motivation, research objectives, research contributions, research limitations, future research, references, important numbers, charts, tables and figures.
+Extract title, subtitle, language, research degree, department, school,
+university, academic term, student authors, corresponding author, advisors,
+co-advisors, research fields, research methods, research variables, datasets,
+keywords, theories, models, technologies, companies, organizations, countries,
+industries, products, programming languages, software, statistical methods,
+research domain, research direction, research question, research motivation,
+research objectives, research contributions, research limitations, future
+research, references, important numbers, charts, tables and figures.
 
 PERSON DETECTION
 
@@ -48,7 +58,14 @@ Identify every person appearing in the paper. Never classify a referenced schola
 
 DATABASE MATCHING
 
-For every extracted entity, determine whether it matches an existing database entity. If likely existing, return match=true, canonical_name and confidence. If new, return match=false and proposed_new_entity=true.
+For every extracted entity, determine whether it matches an existing database
+entity. Compare Chinese and English names by meaning, including established
+acronyms (for example GARCH = 廣義自迴歸條件異方差模型). For a semantic match,
+return match=true, the exact existing id and canonical_name from database_context,
+and confidence. Never invent an id. If no unique existing record is supported,
+return match=false and proposed_new_entity=true. Include the original term and
+an exact source excerpt, page number, chunk ID and confidence for each value.
+Prefer null or no match when evidence is missing or a person name is ambiguous.
 
 ACADEMIC SUMMARY
 
@@ -111,6 +128,7 @@ class MatchedEntity:
     matched: bool
     confidence: float
     object_id: str | None = None
+    user_id: str | None = None
     proposed_new_entity: bool = False
 
     def as_payload(self) -> dict[str, Any]:
@@ -120,6 +138,7 @@ class MatchedEntity:
             "canonical_name": self.canonical_name,
             "confidence": self.confidence,
             "id": self.object_id,
+            "user_id": self.user_id,
             "proposed_new_entity": self.proposed_new_entity,
         }
 
@@ -143,7 +162,7 @@ def chunk_evidence(chunk, excerpt: str | None = None) -> dict[str, Any]:
     }
 
 
-def evidence_for_terms(chunks, terms: list[str], *, fallback: bool = True) -> list[dict[str, Any]]:
+def evidence_for_terms(chunks, terms: list[str], *, fallback: bool = False) -> list[dict[str, Any]]:
     normalized_terms = [normalize_text(term) for term in terms if normalize_text(term)]
     evidence: list[dict[str, Any]] = []
     for chunk in chunks:
@@ -160,6 +179,30 @@ def evidence_for_terms(chunks, terms: list[str], *, fallback: bool = True) -> li
     if not evidence and fallback and chunks:
         evidence.append(chunk_evidence(chunks[0]))
     return evidence
+
+
+def method_context_chunks(chunks):
+    """Keep method evidence in abstracts or methodology chapters, not references."""
+
+    selected = []
+    in_method_chapter = False
+    in_references = False
+    for chunk in chunks:
+        text = chunk.text
+        if re.search(r"(?:^|\n)\s*(參考文獻|References)\s*(?:\n|$)", text, re.IGNORECASE):
+            in_references = True
+            in_method_chapter = False
+        if in_references:
+            continue
+        if re.search(r"(?:^|\n)\s*(?:第[三四34]章|Chapter\s*[34])", text, re.IGNORECASE):
+            in_method_chapter = True
+        elif re.search(r"(?:^|\n)\s*(?:第[一二五六1256]章|Chapter\s*[1256])", text, re.IGNORECASE):
+            in_method_chapter = False
+        if in_method_chapter or re.search(
+            r"(?:摘要|Abstract|研究方法|研究設計|實證方法|Methodology)", text, re.IGNORECASE
+        ):
+            selected.append(chunk)
+    return selected
 
 
 def first_match(pattern: str, text: str, *, flags: int = 0) -> str | None:
@@ -221,14 +264,17 @@ def extract_labeled_items(text: str, label: str) -> list[dict[str, str]]:
 
 def match_professors(names: list[str]) -> list[MatchedEntity]:
     active = list(Professor.objects.active())
-    by_name = {normalize_person_name(item.display_name): item for item in active}
+    by_name: dict[str, set[Professor]] = {}
+    for professor in active:
+        by_name.setdefault(normalize_person_name(professor.display_name), set()).add(professor)
     for professor in active:
         for alias in professor.aliases.all():
-            by_name[normalize_person_name(alias.alias)] = professor
+            by_name.setdefault(normalize_person_name(alias.alias), set()).add(professor)
 
     matches: list[MatchedEntity] = []
     for name in names:
-        professor = by_name.get(normalize_person_name(name))
+        candidates = by_name.get(normalize_person_name(name), set())
+        professor = next(iter(candidates)) if len(candidates) == 1 else None
         matches.append(
             MatchedEntity(
                 name=name,
@@ -243,42 +289,94 @@ def match_professors(names: list[str]) -> list[MatchedEntity]:
 
 
 def match_students(names: list[str]) -> list[MatchedEntity]:
-    by_name = {
-        normalize_research_text(student.display_name): student
-        for student in Student.objects.active()
-    }
+    from accounts.models import User
+
+    by_name: dict[str, list[Student]] = {}
+    for student in Student.objects.active():
+        by_name.setdefault(normalize_research_text(student.display_name), []).append(student)
+    users_by_name: dict[str, list[Any]] = {}
+    for user in User.objects.filter(
+        is_active=True, roles__slug="student", roles__is_active=True,
+        research_student_identity__isnull=True,
+    ).select_related("profile").distinct():
+        profile = getattr(user, "profile", None)
+        display_name = (getattr(profile, "display_name", "") or "").strip()
+        display_name = display_name or user.get_full_name().strip() or user.username
+        users_by_name.setdefault(normalize_research_text(display_name), []).append(user)
     matches: list[MatchedEntity] = []
     for name in names:
-        student = by_name.get(normalize_research_text(name))
+        normalized = normalize_research_text(name)
+        candidates = by_name.get(normalized, [])
+        user_candidates = users_by_name.get(normalized, [])
+        unique = len(candidates) + len(user_candidates) == 1
+        student = candidates[0] if unique and candidates else None
+        user = user_candidates[0] if unique and user_candidates else None
         matches.append(
             MatchedEntity(
                 name=name,
-                canonical_name=student.display_name if student else None,
-                matched=student is not None,
-                confidence=0.96 if student else 0.58,
+                canonical_name=student.display_name if student else name if user else None,
+                matched=student is not None or user is not None,
+                confidence=0.96 if student or user else 0.58,
                 object_id=str(student.pk) if student else None,
-                proposed_new_entity=student is None,
+                user_id=str(user.pk) if user else None,
+                proposed_new_entity=student is None and user is None,
             )
         )
     return matches
 
 
-def match_taxonomy(model, names: list[str]) -> list[MatchedEntity]:
+def match_taxonomy(
+    model, names: list[str], provider_values: list[Any] | None = None, chunks=None
+) -> list[MatchedEntity]:
     terms = list(model.objects.active())
-    index: dict[str, Any] = {}
+    index: dict[str, list[Any]] = {}
+    by_id = {str(term.pk): term for term in terms}
     for term in terms:
         for candidate in [term.slug, term.display_name, *term.aliases]:
-            index[normalize_taxonomy_label(candidate)] = term
+            bucket = index.setdefault(normalize_taxonomy_label(candidate), [])
+            if term not in bucket:
+                bucket.append(term)
 
     matches: list[MatchedEntity] = []
     for name in names:
-        term = index.get(normalize_taxonomy_label(name))
+        matches_for_name = index.get(normalize_taxonomy_label(name), [])
+        term = matches_for_name[0] if len(matches_for_name) == 1 else None
+        confidence = 1.0 if term else 0.6
+        if term is None and provider_values:
+            supplied = next(
+                (value for value in provider_values if isinstance(value, dict)
+                 and normalize_taxonomy_label(item_name(value) or "") == normalize_taxonomy_label(name)),
+                None,
+            )
+            if supplied and supplied.get("match") is True:
+                proposed_id = str(supplied.get("id") or supplied.get("research_field_id")
+                                  or supplied.get("research_method_id") or "")
+                proposed = by_id.get(proposed_id)
+                proposed_confidence = scalar_confidence(supplied)
+                if (
+                    proposed is not None
+                    and proposed_confidence is not None
+                    and proposed_confidence >= 0.8
+                    and chunks is not None
+                    and evidence_for_terms(chunks, [name])
+                ):
+                    term = proposed
+                    confidence = proposed_confidence
+        if provider_values:
+            supplied_confidence = next(
+                (scalar_confidence(value) for value in provider_values
+                 if isinstance(value, dict)
+                 and normalize_taxonomy_label(item_name(value) or "") == normalize_taxonomy_label(name)),
+                None,
+            )
+            if supplied_confidence is not None:
+                confidence = min(confidence, supplied_confidence)
         matches.append(
             MatchedEntity(
                 name=name,
                 canonical_name=term.display_name if term else None,
                 matched=term is not None,
-                confidence=1.0 if term else 0.6,
+                confidence=confidence,
                 object_id=str(term.pk) if term else None,
                 proposed_new_entity=term is None,
             )
@@ -321,6 +419,25 @@ def scalar_evidence(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict) and isinstance(value.get("evidence"), list):
         return [item for item in value["evidence"] if isinstance(item, dict)]
     return []
+
+
+def calibrated_matches(matches: list[MatchedEntity], raw_values: list[Any]) -> list[MatchedEntity]:
+    """A high-confidence database name match cannot raise uncertain extraction confidence."""
+
+    calibrated = []
+    for match in matches:
+        provider_confidence = next(
+            (scalar_confidence(value) for value in raw_values
+             if isinstance(value, dict)
+             and normalize_text(item_name(value) or "").casefold()
+             == normalize_text(match.name).casefold()),
+            None,
+        )
+        calibrated.append(
+            replace(match, confidence=min(match.confidence, provider_confidence))
+            if provider_confidence is not None else match
+        )
+    return calibrated
 
 
 def unique_names(values: list[Any], *, allowed_roles: set[str] | None = None) -> list[str]:
@@ -423,11 +540,19 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
     method_names = unique_names(method_values)
     topic_names = unique_names(topic_values)
 
-    author_matches = match_students(author_names)
-    advisor_matches = match_professors(advisor_names)
-    coadvisor_matches = match_professors(coadvisor_names)
-    field_matches = match_taxonomy(ResearchField, field_names)
-    method_matches = match_taxonomy(ResearchMethod, method_names)
+    author_matches = calibrated_matches(
+        match_students(author_names), author_values + metadata_author_values
+    )
+    advisor_matches = calibrated_matches(
+        match_professors(advisor_names), advisor_values + metadata_advisor_values
+    )
+    coadvisor_matches = calibrated_matches(
+        match_professors(coadvisor_names), advisor_values + metadata_coadvisor_values
+    )
+    field_matches = match_taxonomy(ResearchField, field_names, field_values, chunks)
+    method_matches = match_taxonomy(
+        ResearchMethod, method_names, method_values, method_context_chunks(chunks)
+    )
 
     def entity_payload(match: MatchedEntity, *, role: str) -> dict[str, Any]:
         evidence = evidence_for_terms(chunks, [match.name])
@@ -547,6 +672,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             "name": item.name,
             "matched": item.matched,
             "student_id": item.object_id,
+            "user_id": item.user_id,
             "canonical_name": item.canonical_name,
             "proposed_new_entity": item.proposed_new_entity,
             "confidence": item.confidence,
@@ -589,7 +715,10 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             "canonical_name": item.canonical_name,
             "proposed_new_entity": item.proposed_new_entity,
             "confidence": item.confidence,
-            "evidence": evidence_for_terms(chunks, [item.name]),
+            "evidence": evidence_for_terms(
+                method_context_chunks(chunks) if kind == "research_method" else chunks,
+                [item.name],
+            ),
             "relation": {
                 "action": relation_action,
                 "research_work_id": str(document.research_work_id),
@@ -620,7 +749,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             for item in field_matches
         ],
         "research_methods": [
-            {**item.as_payload(), "evidence": evidence_for_terms(chunks, [item.name])}
+            {**item.as_payload(), "evidence": evidence_for_terms(method_context_chunks(chunks), [item.name])}
             for item in method_matches
         ],
         "research_topics": [
@@ -646,6 +775,7 @@ def normalize_provider_payload(*, document, chunks, raw_payload: dict[str, Any])
             "work_authors": [
                 action["relation"] | {
                     "student_id": action["student_id"],
+                    "user_id": action["user_id"],
                     "student_name": action["name"],
                     "matched": action["matched"],
                     "confidence": action["confidence"],

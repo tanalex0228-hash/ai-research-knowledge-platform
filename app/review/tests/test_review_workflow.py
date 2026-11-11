@@ -426,7 +426,7 @@ class ReviewWorkflowTests(TestCase):
 
         job.refresh_from_db()
         self.assertEqual(job.schema_version, "document_intelligence.v1")
-        self.assertEqual(job.prompt_version.version, 3)
+        self.assertEqual(job.prompt_version.version, 4)
         intelligence_item = items.get(field_path="document_intelligence")
         self.assertIn("metadata", intelligence_item.candidate_value)
         self.assertIn("knowledge_graph", intelligence_item.candidate_value)

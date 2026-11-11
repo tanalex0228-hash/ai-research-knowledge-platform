@@ -1,14 +1,10 @@
-"""Narrow, auditable review state transitions.
-
-Approval records the decision but intentionally does not publish or copy the
-candidate into canonical domain tables.  That governance mapping is a later,
-explicit service boundary.
-"""
+"""Auditable review decisions and narrowly scoped relationship promotion."""
 
 from __future__ import annotations
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from accounts.permissions import is_platform_admin, visible_scopes_for
@@ -138,6 +134,8 @@ def decide_review_item(
 
     previous_state = locked.state
     with _allow_review_transition():
+        if action == ReviewAction.APPROVE and locked.field_path.startswith("relations."):
+            _link_approved_existing_entity(locked)
         decision = ReviewDecision(
             review_item=locked,
             reviewer=reviewer,
@@ -179,6 +177,110 @@ def promote_review_item(item: ReviewItem, value: dict | str) -> None:
     raise PermissionDenied("AI analysis candidates cannot be promoted to canonical data.")
 
 
+def _link_approved_existing_entity(item: ReviewItem) -> None:
+    """Link one existing entity after approval; never create or edit source metadata."""
+
+    from documents.models import DocumentChunk
+    from accounts.models import User
+    from research.models import (
+        AdvisorRole,
+        ResearchWork,
+        RelationshipSource,
+        Student,
+        WorkAuthor,
+        WorkField,
+        WorkMethod,
+    )
+    from taxonomy.models import ResearchField, ResearchMethod
+
+    if item.target_type != ReviewTargetType.RESEARCH_WORK:
+        raise ValidationError("Only research-work relationship candidates can be linked.")
+    source = item.extraction_result.job.source_document
+    if (
+        source.research_work_id != item.target_id
+        or item.extraction_result.job.schema_version != "document_intelligence.v1"
+    ):
+        raise ValidationError("The candidate source does not match this research work.")
+    candidate = item.candidate_value
+    if not isinstance(candidate, dict) or candidate.get("matched") is not True:
+        raise ValidationError("Only matched existing entities can be linked.")
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise ValidationError("A cited source chunk is required before linking.")
+    first = evidence[0]
+    source_chunk = (
+        DocumentChunk.objects.filter(
+            pk=first.get("chunk_id"), source_document=source
+        ).first() if isinstance(first, dict) else None
+    )
+    if source_chunk is None:
+        raise ValidationError("The candidate evidence does not belong to this document.")
+    if first.get("page_number") != source_chunk.page_start:
+        raise ValidationError("The cited page does not match the source chunk.")
+    from review.document_intelligence import normalize_text
+
+    excerpt = normalize_text(first.get("source_excerpt") or "")
+    if not excerpt or excerpt not in normalize_text(source_chunk.text):
+        raise ValidationError("The cited excerpt cannot be verified in the source chunk.")
+
+    work = ResearchWork.objects.select_for_update().get(pk=item.target_id)
+    kind = item.field_path.split(".")[1]
+    if kind == "work_authors":
+        student_id = candidate.get("student_id")
+        user_id = candidate.get("user_id")
+        student = Student.objects.active().filter(pk=student_id).first() if student_id else None
+        user = User.objects.filter(pk=user_id, is_active=True).first() if user_id else None
+        if student is None and (user is None or not user.has_platform_role("student")):
+            raise ValidationError("The matched student account is no longer active or available.")
+        existing = WorkAuthor.objects.filter(research_work=work)
+        already_linked = (
+            existing.filter(student=student).exists()
+            if student else existing.filter(user=user).exists()
+        )
+        if not already_linked:
+            position = (WorkAuthor.objects.filter(research_work=work).aggregate(
+                maximum=Max("position")
+            )["maximum"] or 0) + 1
+            if student:
+                WorkAuthor.objects.create(research_work=work, student=student, position=position)
+            else:
+                WorkAuthor.objects.create(research_work=work, user=user, position=position)
+    elif kind == "work_advisors":
+        professor = Professor.objects.active().filter(pk=candidate.get("professor_id")).first()
+        if professor is None:
+            raise ValidationError("The matched professor is no longer active or available.")
+        if not WorkAdvisor.objects.filter(research_work=work, professor=professor).exists():
+            position = (WorkAdvisor.objects.filter(research_work=work).aggregate(
+                maximum=Max("position")
+            )["maximum"] or 0) + 1
+            role = candidate.get("role")
+            if role not in AdvisorRole.values:
+                raise ValidationError("The advisor role is not supported.")
+            WorkAdvisor.objects.create(
+                research_work=work, professor=professor, role=role, position=position
+            )
+    elif kind == "work_fields":
+        field = ResearchField.objects.active().filter(pk=candidate.get("research_field_id")).first()
+        if field is None:
+            raise ValidationError("The matched research field is no longer active.")
+        WorkField.objects.get_or_create(
+            research_work=work,
+            research_field=field,
+            defaults={"source_type": RelationshipSource.AI_APPROVED},
+        )
+    elif kind == "work_methods":
+        method = ResearchMethod.objects.active().filter(pk=candidate.get("research_method_id")).first()
+        if method is None:
+            raise ValidationError("The matched research method is no longer active.")
+        WorkMethod.objects.get_or_create(
+            research_work=work,
+            research_method=method,
+            defaults={"source_type": RelationshipSource.AI_APPROVED},
+        )
+    else:
+        raise ValidationError("Unsupported relationship candidate.")
+
+
 
 def create_extraction_job_and_candidates(
     document: SourceDocument,
@@ -209,7 +311,7 @@ def create_extraction_job_and_candidates(
     # 1. Get or create a PromptVersion for metadata extraction
     prompt_version, _ = PromptVersion.objects.get_or_create(
         key="metadata-extraction",
-        version=3,
+        version=4,
         defaults={
             "template": DOCUMENT_INTELLIGENCE_PROMPT,
             "status": "active",
@@ -332,15 +434,14 @@ def create_extraction_job_and_candidates(
         else:
             title = lines[0] if lines else "Untitled Research"
             title_from_document = bool(lines)
-    if not title:
-        title = document.research_work.title or "Untitled Research"
     extracted_summary["title"] = title if title_from_document else None
     extracted_summary["title_confidence"] = 0.9 if title_from_document else None
-    add_candidate("title", title, ExtractionResultType.SUMMARY,
-                  confidence=0.9,
-                  evidence="First chunk of PDF contains title text in prominent layout.",
-                  source_text=first_chunk_text[:500],
-                  extraction_reason="Heuristically extracted highest length line matching Title layout rules.")
+    if title_from_document:
+        add_candidate("title", title, ExtractionResultType.SUMMARY,
+                      confidence=0.9,
+                      evidence="First chunk of PDF contains title text in prominent layout.",
+                      source_text=first_chunk_text[:500],
+                      extraction_reason="Heuristically extracted highest length line matching Title layout rules.")
 
     # Extract Abstract
     abstract = ""
@@ -354,15 +455,14 @@ def create_extraction_job_and_candidates(
             if abstract:
                 abstract_from_document = True
                 break
-    if not abstract:
-        abstract = document.research_work.abstract or (first_chunk_text[:500] + "...")
     extracted_summary["abstract"] = abstract if abstract_from_document else None
     extracted_summary["abstract_confidence"] = 0.95 if abstract_from_document else None
-    add_candidate("abstract", abstract, ExtractionResultType.SUMMARY,
-                  confidence=0.95,
-                  evidence="Extracted matching segment after 'Abstract' keyword block.",
-                  source_text=first_chunk_text[:1000],
-                  extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
+    if abstract_from_document:
+        add_candidate("abstract", abstract, ExtractionResultType.SUMMARY,
+                      confidence=0.95,
+                      evidence="Extracted matching segment after 'Abstract' keyword block.",
+                      source_text=first_chunk_text[:1000],
+                      extraction_reason="Regex match for 'Abstract/摘要' boundary with keyword exclusions.")
 
     # Extract Language
     has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', all_chunks_text))
@@ -404,31 +504,6 @@ def create_extraction_job_and_candidates(
             chunk_text_lower = chunk.text.lower()
             if any(name in chunk_text_lower for name in names_to_check):
                 field_names_found.append(field.display_name)
-                result = AIExtractionResult.objects.create(
-                    job=job,
-                    result_type=ExtractionResultType.FIELD,
-                    candidate_data={"slug": field.slug},
-                    confidence=1.0,
-                    primary_evidence_chunk=chunk,
-                    schema_version=job.schema_version,
-                    visibility_scope=document.visibility_scope,
-                    status=ExtractionResultStatus.CANDIDATE,
-                )
-                ReviewItem.objects.create(
-                    extraction_result=result,
-                    target_type=ReviewTargetType.RESEARCH_WORK,
-                    target_id=document.research_work_id,
-                    field_path=f"fields.{field.slug}",
-                    candidate_value={"slug": field.slug},
-                    state=ReviewState.PENDING,
-                    visibility_scope=document.visibility_scope,
-                    confidence=1.0,
-                    model="taxonomy-keyword-matcher",
-                    evidence=f"Matched field slug or display name in chunk {chunk.chunk_index}.",
-                    source_text=chunk.text[:500],
-                    extraction_reason=f"Deterministic keyword match for taxonomy field '{field.display_name}'.",
-                )
-                candidates_created += 1
                 break
 
     for method in methods:
@@ -437,31 +512,6 @@ def create_extraction_job_and_candidates(
             chunk_text_lower = chunk.text.lower()
             if any(name in chunk_text_lower for name in names_to_check):
                 method_names_found.append(method.display_name)
-                result = AIExtractionResult.objects.create(
-                    job=job,
-                    result_type=ExtractionResultType.METHOD,
-                    candidate_data={"slug": method.slug},
-                    confidence=1.0,
-                    primary_evidence_chunk=chunk,
-                    schema_version=job.schema_version,
-                    visibility_scope=document.visibility_scope,
-                    status=ExtractionResultStatus.CANDIDATE,
-                )
-                ReviewItem.objects.create(
-                    extraction_result=result,
-                    target_type=ReviewTargetType.RESEARCH_WORK,
-                    target_id=document.research_work_id,
-                    field_path=f"methods.{method.slug}",
-                    candidate_value={"slug": method.slug},
-                    state=ReviewState.PENDING,
-                    visibility_scope=document.visibility_scope,
-                    confidence=1.0,
-                    model="taxonomy-keyword-matcher",
-                    evidence=f"Matched method slug or display name in chunk {chunk.chunk_index}.",
-                    source_text=chunk.text[:500],
-                    extraction_reason=f"Deterministic keyword match for taxonomy method '{method.display_name}'.",
-                )
-                candidates_created += 1
                 break
 
     active_ai_request = ai_request
@@ -544,6 +594,55 @@ def create_extraction_job_and_candidates(
         ),
         candidate_data=intelligence_payload,
     )
+
+    # One review row per proposed relation lets the reviewer approve only the
+    # existing people/taxonomy terms they verified. Unmatched names remain
+    # suggestions and never create canonical entities or links.
+    for kind in ("work_authors", "work_advisors", "work_fields", "work_methods"):
+        for index, candidate in enumerate(
+            intelligence_payload.get("database_actions", {}).get(kind, [])
+        ):
+            evidence = candidate.get("evidence") if isinstance(candidate, dict) else None
+            if not isinstance(evidence, list) or not evidence:
+                continue
+            first_evidence = evidence[0]
+            if not isinstance(first_evidence, dict):
+                continue
+            source_chunk = next(
+                (chunk for chunk in chunks if str(chunk.pk) == first_evidence.get("chunk_id")),
+                None,
+            )
+            if source_chunk is None:
+                continue
+            matched = candidate.get("matched") is True
+            result = AIExtractionResult.objects.create(
+                job=job,
+                result_type=ExtractionResultType.RELATIONSHIP,
+                candidate_data=candidate,
+                confidence=candidate.get("confidence") or 0,
+                primary_evidence_chunk=source_chunk,
+                schema_version=job.schema_version,
+                visibility_scope=document.visibility_scope,
+                status=ExtractionResultStatus.CANDIDATE,
+            )
+            ReviewItem.objects.create(
+                extraction_result=result,
+                target_type=ReviewTargetType.RESEARCH_WORK,
+                target_id=document.research_work_id,
+                field_path=("relations" if matched else "suggestions") + f".{kind}.{index + 1}",
+                candidate_value=candidate,
+                state=ReviewState.PENDING,
+                visibility_scope=document.visibility_scope,
+                confidence=candidate.get("confidence") or 0,
+                model=intelligence_model,
+                evidence=f"第 {first_evidence.get('page_number')} 頁：{first_evidence.get('source_excerpt', '')}",
+                source_text=first_evidence.get("source_excerpt", "")[:1000],
+                extraction_reason=(
+                    "Existing database match awaiting human approval."
+                    if matched else "No unique existing database match; informational only."
+                ),
+            )
+            candidates_created += 1
 
     # 5. Complete Job & Request Log
     job.status = ExtractionJobStatus.SUCCEEDED

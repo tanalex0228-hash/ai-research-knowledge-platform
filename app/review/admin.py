@@ -74,10 +74,11 @@ class AIExtractionResultAdmin(admin.ModelAdmin):
 @admin.register(ReviewItem)
 class ReviewItemAdmin(admin.ModelAdmin):
     list_display = (
-        "field_path",
+        "candidate_type",
         "work_title",
         "candidate_preview",
         "confidence_display",
+        "model",
         "state",
         "visibility_scope",
         "created_at",
@@ -93,6 +94,20 @@ class ReviewItemAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.display(description="候選項目")
+    def candidate_type(self, obj):
+        names = {
+            "work_authors": "研究學生",
+            "work_advisors": "指導教師",
+            "work_fields": "研究領域",
+            "work_methods": "研究方法",
+        }
+        parts = obj.field_path.split(".")
+        if len(parts) >= 3 and parts[0] in {"relations", "suggestions"}:
+            suffix = "可關聯" if parts[0] == "relations" else "未找到既有資料"
+            return f"{names.get(parts[1], parts[1])} · {suffix}"
+        return obj.field_path
 
     @admin.display(description="研究成果")
     def work_title(self, obj):
@@ -112,7 +127,11 @@ class ReviewItemAdmin(admin.ModelAdmin):
         from django.utils.html import format_html
         val = obj.candidate_value
         if isinstance(val, dict):
-            display = val.get("value") or val.get("slug") or str(val)
+            display = val.get("name") or val.get("value") or val.get("slug") or str(val)
+            if val.get("canonical_name") and val.get("canonical_name") != display:
+                display = f"{display} → {val['canonical_name']}"
+            if val.get("provider_fallback_reason"):
+                display = f"規則備援：{val['provider_fallback_reason']}"
         else:
             display = str(val)
         preview = str(display)[:60]
@@ -147,7 +166,11 @@ class ReviewItemAdmin(admin.ModelAdmin):
         if succeeded:
             self.message_user(
                 request,
-                f"已記錄 {succeeded} 筆不可變審核決策。",
+                (
+                    f"已核准 {succeeded} 筆；其中既有資料的關聯已附加至研究成果。"
+                    if action == ReviewAction.APPROVE
+                    else f"已記錄 {succeeded} 筆不可變審核決策。"
+                ),
                 level=messages.SUCCESS,
             )
         if failures:

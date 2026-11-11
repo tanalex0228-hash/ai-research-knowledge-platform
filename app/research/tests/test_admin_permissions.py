@@ -2,6 +2,8 @@ from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TestCase
+from django.urls import reverse
+from unittest.mock import Mock
 
 from accounts.models import User
 from research.admin import (
@@ -107,3 +109,59 @@ class ResearchAdminGroupPermissionTests(TestCase):
         self.assertFalse(model_admin.has_add_permission(request))
         self.assertFalse(model_admin.has_change_permission(request))
         self.assertFalse(model_admin.has_delete_permission(request))
+
+    def test_inline_author_reordering_swaps_positions_without_unique_conflict(self):
+        first = Student.objects.create(display_name="First author")
+        second = Student.objects.create(display_name="Second author")
+        first_link = WorkAuthor.objects.create(
+            research_work=self.work, student=first, position=1
+        )
+        second_link = WorkAuthor.objects.create(
+            research_work=self.work, student=second, position=2
+        )
+        formset = Mock()
+        formset.model = WorkAuthor
+        formset.instance = self.work
+        formset.deleted_objects = []
+        formset.forms = []
+        for link, position in ((first_link, 2), (second_link, 1)):
+            inline_form = Mock()
+            inline_form.cleaned_data = {"position": position}
+            inline_form.save.return_value = link
+            formset.forms.append(inline_form)
+
+        ResearchWorkAdmin(ResearchWork, self.site).save_formset(
+            self.request(), Mock(), formset, change=True
+        )
+
+        first_link.refresh_from_db()
+        second_link.refresh_from_db()
+        self.assertEqual((first_link.position, second_link.position), (2, 1))
+
+    def test_standalone_author_move_buttons_reorder_and_audit(self):
+        from accounts.models import AuditLog
+
+        self.grant(WorkAuthor, "change")
+        first = Student.objects.create(display_name="First author")
+        second = Student.objects.create(display_name="Second author")
+        first_link = WorkAuthor.objects.create(
+            research_work=self.work, student=first, position=1
+        )
+        second_link = WorkAuthor.objects.create(
+            research_work=self.work, student=second, position=2
+        )
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("admin:research_workauthor_move", args=[second_link.pk, "up"])
+        )
+
+        self.assertEqual(response.status_code, 204)
+        first_link.refresh_from_db()
+        second_link.refresh_from_db()
+        self.assertEqual((first_link.position, second_link.position), (2, 1))
+        self.assertTrue(
+            AuditLog.objects.filter(
+                event_type="research_work.author_reordered",
+                target_id=self.work.pk,
+            ).exists()
+        )

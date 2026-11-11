@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from django.conf import settings
 
+from accounts.models import User
 from professors.models import Professor
 from research.models import Student
 from taxonomy.models import ResearchField, ResearchMethod
@@ -61,6 +62,12 @@ class DocumentIntelligenceProvider(Protocol):
 
 
 def database_context() -> dict[str, Any]:
+    student_users = User.objects.filter(
+        is_active=True,
+        roles__slug="student",
+        roles__is_active=True,
+        research_student_identity__isnull=True,
+    ).select_related("profile").distinct()
     return {
         "students": [
             {
@@ -69,6 +76,18 @@ def database_context() -> dict[str, Any]:
                 "normalized_name": student.normalized_name,
             }
             for student in Student.objects.active().order_by("display_name")
+        ] + [
+            {
+                "id": None,
+                "user_id": str(user.pk),
+                "display_name": (
+                    (getattr(getattr(user, "profile", None), "display_name", "") or "").strip()
+                    or user.get_full_name().strip()
+                    or user.username
+                ),
+                "account_without_research_student": True,
+            }
+            for user in student_users
         ],
         "professors": [
             {
@@ -226,6 +245,9 @@ class OpenAIDocumentIntelligenceProvider:
 
         request_payload = {
             "model": self.model_name,
+            "max_output_tokens": int(
+                getattr(settings, "DOCUMENT_INTELLIGENCE_MAX_OUTPUT_TOKENS", 16000)
+            ),
             "input": [
                 {
                     "role": "system",
@@ -271,6 +293,11 @@ class OpenAIDocumentIntelligenceProvider:
             raise DocumentIntelligenceProviderError(str(exc)) from exc
         except json.JSONDecodeError as exc:
             raise DocumentIntelligenceMalformedOutput("OpenAI returned invalid JSON response.") from exc
+
+        if raw_response.get("status") == "incomplete":
+            raise DocumentIntelligenceMalformedOutput(
+                "OpenAI response was incomplete; check the output token limit."
+            )
 
         raw_text = raw_response.get("output_text")
         if not raw_text:

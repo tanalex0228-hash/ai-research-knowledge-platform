@@ -4,6 +4,7 @@ import tempfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from django.core.exceptions import ValidationError
 
 from accounts.permissions import VisibilityScope
 from ai.models import AIRequestLog, AIRequestStatus
@@ -24,7 +25,8 @@ from review.document_intelligence_providers import (
     get_document_intelligence_provider,
 )
 from review.models import ReviewItem
-from review.services import create_extraction_job_and_candidates
+from review.models import ReviewAction, ReviewState
+from review.services import create_extraction_job_and_candidates, decide_review_item
 from taxonomy.models import ResearchField, ResearchMethod
 
 
@@ -164,6 +166,20 @@ class DocumentIntelligenceProviderTests(TestCase):
             field_path="document_intelligence",
         )
 
+    def relation_item(self, kind, *, matched=True):
+        prefix = "relations" if matched else "suggestions"
+        return ReviewItem.objects.get(
+            target_id=self.work.id,
+            field_path=f"{prefix}.{kind}.1",
+        )
+
+    def admin_user(self):
+        from accounts.models import User
+
+        return User.objects.create_superuser(
+            username="reviewer", email="reviewer@example.test", password="test-password"
+        )
+
     def test_one_author_existing_entity_match_and_evidence(self):
         create_extraction_job_and_candidates(
             self.document,
@@ -258,6 +274,145 @@ class DocumentIntelligenceProviderTests(TestCase):
         self.assertFalse(WorkAdvisor.objects.filter(research_work=self.work).exists())
         self.assertFalse(WorkField.objects.filter(research_work=self.work).exists())
         self.assertFalse(WorkMethod.objects.filter(research_work=self.work).exists())
+
+    def test_approved_existing_matches_link_only_selected_relationships(self):
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=self.payload())
+        )
+        reviewer = self.admin_user()
+        student_item = self.relation_item("work_authors")
+        field_item = self.relation_item("work_fields")
+        method_item = self.relation_item("work_methods")
+        advisor_item = self.relation_item("work_advisors")
+        for item in (student_item, field_item, method_item, advisor_item):
+            decide_review_item(item=item, reviewer=reviewer, action=ReviewAction.APPROVE)
+
+        self.assertEqual(WorkAuthor.objects.get(research_work=self.work).student, self.student)
+        self.assertEqual(WorkAdvisor.objects.get(research_work=self.work).professor, self.professor)
+        self.assertEqual(WorkField.objects.get(research_work=self.work).research_field, self.field)
+        self.assertEqual(WorkMethod.objects.get(research_work=self.work).research_method, self.method)
+        self.assertEqual(self.relation_item("work_authors").state, ReviewState.APPROVED)
+        self.work.refresh_from_db()
+        self.assertEqual(self.work.title, "Placeholder title")
+        self.assertEqual(self.work.year, 2026)
+        self.assertEqual(self.work.work_type, ResearchWorkType.MASTER_THESIS)
+
+    def test_unmatched_suggestions_never_create_entities(self):
+        create_extraction_job_and_candidates(
+            self.document,
+            provider=FakeProvider(
+                payload=self.payload(authors=[
+                    {"full_name": "譚孝安", "role": "Student"},
+                    {"full_name": "林新生", "role": "Student"},
+                ])
+            ),
+        )
+        item = ReviewItem.objects.get(field_path="suggestions.work_authors.2")
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        self.assertFalse(Student.objects.filter(display_name="林新生").exists())
+        self.assertFalse(WorkAuthor.objects.filter(research_work=self.work).exists())
+
+    def test_invalid_evidence_rolls_back_relation_approval(self):
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=self.payload())
+        )
+        item = self.relation_item("work_authors")
+        from review.models import ReviewDecision
+
+        item.candidate_value["evidence"] = []
+        # Immutable candidate fields cannot be changed after creation.
+        with self.assertRaises(ValidationError):
+            item.save()
+        self.assertFalse(ReviewDecision.objects.filter(review_item=item).exists())
+
+    def test_semantic_taxonomy_match_uses_validated_existing_id(self):
+        chinese_method = ResearchMethod.objects.create(
+            slug="garch-zh", display_name="廣義自迴歸條件異方差模型"
+        )
+        self.chunk2.text += "\n第三章 研究方法：使用 GARCH 模型估計波動率。"
+        self.chunk2.save(update_fields=["text"])
+        payload = self.payload()
+        payload["research_methods"].append(
+            {
+                "name": "GARCH",
+                "match": True,
+                "id": str(chinese_method.pk),
+                "canonical_name": chinese_method.display_name,
+                "confidence": 0.91,
+            }
+        )
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=payload)
+        )
+        method_actions = self.document_intelligence_item().candidate_value[
+            "database_actions"
+        ]["work_methods"]
+        garch = next(action for action in method_actions if action["research_method_name"] == "GARCH")
+        self.assertTrue(garch["matched"])
+        self.assertEqual(garch["research_method_id"], str(chinese_method.pk))
+        self.assertEqual(garch["evidence"][0]["page_number"], 2)
+
+    def test_method_only_in_references_has_no_approvable_relation(self):
+        self.chunk2.text = "參考文獻\nGARCH (1986) is cited but not used."
+        self.chunk2.save(update_fields=["text"])
+        method = ResearchMethod.objects.create(
+            slug="garch-zh", display_name="廣義自迴歸條件異方差模型"
+        )
+        payload = self.payload()
+        payload["research_methods"] = [{
+            "name": "GARCH", "match": True, "id": str(method.pk), "confidence": 0.99
+        }]
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=payload)
+        )
+        self.assertFalse(
+            ReviewItem.objects.filter(field_path__startswith="relations.work_methods").exists()
+        )
+
+    def test_existing_coadvisor_is_linked_with_separate_role(self):
+        coadvisor = Professor.objects.create(display_name="王大明")
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=self.payload())
+        )
+        item = ReviewItem.objects.get(field_path="relations.work_advisors.2")
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        self.assertEqual(
+            WorkAdvisor.objects.get(research_work=self.work).professor, coadvisor
+        )
+        self.assertEqual(
+            WorkAdvisor.objects.get(research_work=self.work).role, "co_advisor"
+        )
+
+    def test_ambiguous_student_name_is_not_automatically_linked(self):
+        Student.objects.create(display_name="譚孝安")
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=self.payload())
+        )
+        item = ReviewItem.objects.get(field_path="suggestions.work_authors.1")
+        self.assertFalse(item.candidate_value["matched"])
+
+    def test_existing_student_user_without_research_identity_can_be_approved(self):
+        from accounts.models import Role, User, UserRole
+
+        user = User.objects.create_user(
+            username="林新生", email="new-student@example.test"
+        )
+        UserRole.objects.create(user=user, role=Role.objects.get(slug="student"))
+        create_extraction_job_and_candidates(
+            self.document,
+            provider=FakeProvider(payload=self.payload(authors=[
+                {"full_name": "林新生", "role": "Student", "confidence": 0.9}
+            ])),
+        )
+        item = self.relation_item("work_authors")
+        self.assertEqual(item.candidate_value["user_id"], str(user.pk))
+        self.assertIsNone(item.candidate_value["student_id"])
+
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+
+        author = WorkAuthor.objects.get(research_work=self.work)
+        self.assertEqual(author.user, user)
+        self.assertEqual(author.student.user, user)
 
     def test_malformed_provider_json_falls_back_and_records_failed_request(self):
         create_extraction_job_and_candidates(
