@@ -366,6 +366,69 @@ class DocumentIntelligenceProviderTests(TestCase):
         self.assertFalse(Student.objects.filter(display_name="林新生").exists())
         self.assertFalse(WorkAuthor.objects.filter(research_work=self.work).exists())
 
+    def test_approved_new_field_and_method_are_created_and_linked(self):
+        create_extraction_job_and_candidates(
+            self.document, provider=FakeProvider(payload=self.payload())
+        )
+        self.assertFalse(ResearchField.objects.filter(display_name="新興金融科技").exists())
+        self.assertFalse(ResearchMethod.objects.filter(display_name="事件研究法").exists())
+        reviewer = self.admin_user()
+        for path in ("suggestions.work_fields.2", "suggestions.work_methods.2"):
+            decide_review_item(
+                item=ReviewItem.objects.get(field_path=path),
+                reviewer=reviewer,
+                action=ReviewAction.APPROVE,
+            )
+        field = ResearchField.objects.get(display_name="新興金融科技")
+        method = ResearchMethod.objects.get(display_name="事件研究法")
+        self.assertEqual(field.slug, field.display_name)
+        self.assertEqual(method.slug, method.display_name)
+        self.assertTrue(WorkField.objects.filter(
+            research_work=self.work, research_field=field
+        ).exists())
+        self.assertTrue(WorkMethod.objects.filter(
+            research_work=self.work, research_method=method
+        ).exists())
+        self.assertEqual(self.work.title, "Placeholder title")
+
+    def test_english_new_method_uses_equal_slug_and_name_with_source_alias(self):
+        self.chunk2.text += "\n第三章 研究方法：使用 GARCH 分析。"
+        self.chunk2.save(update_fields=["text"])
+        payload = self.payload()
+        payload["research_methods"].append({"name": "GARCH", "confidence": 0.93})
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=payload))
+        item = ReviewItem.objects.get(field_path="suggestions.work_methods.3")
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        method = ResearchMethod.objects.get(slug="garch")
+        self.assertEqual(method.display_name, "garch")
+        self.assertIn("GARCH", method.aliases)
+        self.assertTrue(WorkMethod.objects.filter(
+            research_work=self.work, research_method=method
+        ).exists())
+
+    def test_new_taxonomy_approval_rejects_stale_evidence(self):
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=self.payload()))
+        item = ReviewItem.objects.get(field_path="suggestions.work_fields.2")
+        self.chunk1.text = "封面內容已變更"
+        self.chunk1.save(update_fields=["text"])
+        with self.assertRaises(ValidationError):
+            decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        item.refresh_from_db()
+        self.assertEqual(item.state, ReviewState.PENDING)
+        self.assertFalse(ResearchField.objects.filter(display_name="新興金融科技").exists())
+
+    def test_taxonomy_created_after_extraction_is_reused_on_approval(self):
+        create_extraction_job_and_candidates(self.document, provider=FakeProvider(payload=self.payload()))
+        existing = ResearchField.objects.create(
+            slug="emerging-fintech", display_name="新興金融科技"
+        )
+        item = ReviewItem.objects.get(field_path="suggestions.work_fields.2")
+        decide_review_item(item=item, reviewer=self.admin_user(), action=ReviewAction.APPROVE)
+        self.assertEqual(ResearchField.objects.filter(display_name="新興金融科技").count(), 1)
+        self.assertTrue(WorkField.objects.filter(
+            research_work=self.work, research_field=existing
+        ).exists())
+
     def test_invalid_evidence_rolls_back_relation_approval(self):
         create_extraction_job_and_candidates(
             self.document, provider=FakeProvider(payload=self.payload())

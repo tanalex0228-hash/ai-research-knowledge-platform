@@ -140,6 +140,10 @@ def decide_review_item(
     with _allow_review_transition():
         if action == ReviewAction.APPROVE and locked.field_path.startswith("relations."):
             _link_approved_existing_entity(locked)
+        elif action == ReviewAction.APPROVE and locked.field_path.startswith(
+            ("suggestions.work_fields.", "suggestions.work_methods.")
+        ):
+            _create_approved_taxonomy(locked)
         elif action == ReviewAction.APPROVE and locked.field_path == "abstract":
             _apply_approved_abstract(locked)
         decision = ReviewDecision(
@@ -318,6 +322,96 @@ def _link_approved_existing_entity(item: ReviewItem) -> None:
         )
     else:
         raise ValidationError("Unsupported relationship candidate.")
+
+
+def _create_approved_taxonomy(item: ReviewItem) -> None:
+    """Create and link an evidenced new field/method only on admin approval."""
+
+    from django.utils.text import slugify
+    from documents.models import DocumentChunk
+    from research.models import ResearchWork, RelationshipSource, WorkField, WorkMethod
+    from review.document_intelligence import normalize_text
+    from taxonomy.models import (
+        ResearchField, ResearchMethod, TaxonomyStatus, normalize_taxonomy_label,
+    )
+
+    if item.target_type != ReviewTargetType.RESEARCH_WORK:
+        raise ValidationError("Taxonomy suggestions must target a research work.")
+    source = item.extraction_result.job.source_document
+    if (
+        source.research_work_id != item.target_id
+        or item.extraction_result.job.schema_version != "document_intelligence.v1"
+    ):
+        raise ValidationError("The taxonomy candidate source does not match this work.")
+
+    kind = item.field_path.split(".")[1]
+    model, relation_model, name_key, id_key = {
+        "work_fields": (ResearchField, WorkField, "research_field_name", "research_field_id"),
+        "work_methods": (ResearchMethod, WorkMethod, "research_method_name", "research_method_id"),
+    }[kind]
+    candidate = item.candidate_value
+    if (
+        not isinstance(candidate, dict)
+        or candidate.get("matched") is not False
+        or candidate.get(id_key) is not None
+        or candidate.get("action") != (
+            "create_work_field" if kind == "work_fields" else "create_work_method"
+        )
+    ):
+        raise ValidationError("Only unmatched field/method suggestions can create taxonomy.")
+    raw_name = candidate.get(name_key)
+    if not isinstance(raw_name, str):
+        raise ValidationError("The proposed taxonomy name must be text.")
+    name = normalize_text(raw_name)
+    slug = slugify(name, allow_unicode=True).lower()
+    if not name or len(name) > 160 or not slug or len(slug) > 120:
+        raise ValidationError("The proposed taxonomy name cannot form a valid slug.")
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, list) or not evidence or not isinstance(evidence[0], dict):
+        raise ValidationError("A cited source chunk is required before creating taxonomy.")
+    cited = evidence[0]
+    if not isinstance(cited.get("source_excerpt"), str):
+        raise ValidationError("The cited source excerpt must be text.")
+    chunk = DocumentChunk.objects.filter(
+        pk=cited.get("chunk_id"), source_document=source
+    ).first()
+    if (
+        chunk is None
+        or cited.get("page_number") != chunk.page_start
+        or not normalize_text(cited.get("source_excerpt") or "")
+        or normalize_text(cited["source_excerpt"]) not in normalize_text(chunk.text)
+    ):
+        raise ValidationError("The taxonomy evidence cannot be verified in the document.")
+
+    work = ResearchWork.objects.select_for_update().get(pk=item.target_id)
+    needle = normalize_taxonomy_label(name)
+    matches = [
+        term for term in model.objects.select_for_update()
+        if any(
+            normalize_taxonomy_label(label) == needle
+            for label in (term.slug, term.display_name, *term.aliases)
+        )
+    ]
+    if len(matches) > 1:
+        raise ValidationError("Multiple taxonomy records match this suggestion; resolve manually.")
+    if matches:
+        term = matches[0]
+    else:
+        term, _ = model.objects.get_or_create(
+            slug=slug,
+            defaults={
+                "display_name": slug,
+                "aliases": [name] if name != slug else [],
+                "visibility_scope": item.visibility_scope,
+            },
+        )
+    if term.status != TaxonomyStatus.ACTIVE:
+        raise ValidationError("An archived taxonomy record matches this suggestion.")
+    relation_model.objects.get_or_create(
+        research_work=work,
+        **{("research_field" if kind == "work_fields" else "research_method"): term},
+        defaults={"source_type": RelationshipSource.AI_APPROVED},
+    )
 
 
 

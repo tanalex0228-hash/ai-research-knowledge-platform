@@ -105,7 +105,11 @@ class ReviewItemAdmin(admin.ModelAdmin):
         }
         parts = obj.field_path.split(".")
         if len(parts) >= 3 and parts[0] in {"relations", "suggestions"}:
-            suffix = "可關聯" if parts[0] == "relations" else "未找到既有資料"
+            suffix = (
+                "可關聯" if parts[0] == "relations" else
+                "核准後建立並關聯" if parts[1] in {"work_fields", "work_methods"} else
+                "未找到既有資料"
+            )
             return f"{names.get(parts[1], parts[1])} · {suffix}"
         if obj.field_path == "authors":
             return "作者辨識總覽 · 不建立關聯"
@@ -161,6 +165,7 @@ class ReviewItemAdmin(admin.ModelAdmin):
     def _apply_decision(self, request, queryset, *, action, reason):
         succeeded = 0
         relation_reviews = 0
+        new_taxonomy_reviews = 0
         failures: list[str] = []
         for item in queryset.only("pk"):
             try:
@@ -176,13 +181,17 @@ class ReviewItemAdmin(admin.ModelAdmin):
                 succeeded += 1
                 if action == ReviewAction.APPROVE and item.field_path.startswith("relations."):
                     relation_reviews += 1
+                elif action == ReviewAction.APPROVE and item.field_path.startswith(
+                    ("suggestions.work_fields.", "suggestions.work_methods.")
+                ):
+                    new_taxonomy_reviews += 1
 
         if succeeded:
             self.message_user(
                 request,
                 (
-                    f"已核准 {succeeded} 筆；其中 {relation_reviews} 筆為逐人／分類關聯審核，"
-                    "其餘僅記錄審核結果，不會建立關聯。"
+                    f"已核准 {succeeded} 筆；既有資料關聯 {relation_reviews} 筆、"
+                    f"新建並關聯分類 {new_taxonomy_reviews} 筆；其餘僅記錄審核結果。"
                     if action == ReviewAction.APPROVE
                     else f"已記錄 {succeeded} 筆不可變審核決策。"
                 ),
